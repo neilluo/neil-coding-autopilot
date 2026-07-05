@@ -9,6 +9,14 @@ description: "需求分析与Spec生成。当收到新需求（自然语言/GitH
 
 **宣告**: "正在使用 autopilot-analyze 进行需求分析和 Spec 生成。"
 
+## 前置检查（自动执行）
+
+执行本 skill 前，必须确认：
+1. `.autopilot/progress.md` 存在
+2. 本阶段的前置阶段已标记 `[x]`（analyze 无前置，仅需确认 progress.md 存在）
+
+如果前置未满足，立即停止并提示需要先执行哪个阶段。
+
 ## 输入
 
 - 自然语言需求描述，或
@@ -127,12 +135,9 @@ cat $HARNESS_DIR/knowledge-base.md 2>/dev/null || echo "No knowledge base yet"
 **自检方式**: 使用独立 qodercli worker 做审查：
 
 ```bash
+# 模型选择说明：$AUTOPILOT_REVIEWER_MODEL（当前 qodercli 不支持 model 参数，使用默认模型）
 # 控制器生成自检 prompt 后调度独立审查实例
-$AGENT_DISPATCH --model "$AUTOPILOT_REVIEWER_MODEL" \
-  --cwd "$PROJECT_ROOT" \
-  --prompt-file /tmp/autopilot-spec-review-N.md \
-  --instruction "作为资深架构师审查 SPEC.md，输出 Critical/Major/Minor 分级建议" \
-  > /tmp/autopilot-spec-review-N-result.md 2>&1
+qodercli -p "$(cat /tmp/autopilot-spec-review-N.md)" --permission-mode bypass_permissions --max-turns 30 --output-format text 2>&1 | tail -20
 ```
 
 ### Step 5: 输出
@@ -147,3 +152,11 @@ $AGENT_DISPATCH --model "$AUTOPILOT_REVIEWER_MODEL" \
 - 每张数据库表必须有 `ext_info JSON` 扩展字段
 - ext_info 内必须包含 traceId
 - 不做多用户设计（除非需求明确要求）
+
+## 强制后继（MANDATORY NEXT STEP）
+
+本阶段完成后：
+1. 调用 autopilot-checkpoint 标记 analyze 完成
+2. 必须立即调用 `Skill("autopilot-plan")`
+
+不调用后继 = 流程中断，工作视为未完成。

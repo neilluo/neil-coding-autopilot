@@ -9,6 +9,14 @@ description: "分支完成与合并。所有Task完成后，创建PR或直接合
 
 **宣告**: "正在使用 autopilot-finish 完成分支合并。"
 
+## 前置检查（自动执行）
+
+执行本 skill 前，必须确认：
+1. `.autopilot/progress.md` 存在
+2. 本阶段的前置阶段已标记 `[x]`：loop 必须已完成
+
+如果前置未满足，立即停止并提示需要先执行哪个阶段。
+
 ## Process
 
 ### Step 1: 验证所有 Task 完成
@@ -78,3 +86,11 @@ gh run list --limit 1
 - 不删除工作分支（保留历史）
 - PR 标题遵循 Conventional Commits 格式
 - 如果 push 失败（冲突），尝试 rebase 一次，再失败则 BLOCKED
+
+## 强制后继（MANDATORY NEXT STEP）
+
+分支合并完成后：
+1. 调用 autopilot-checkpoint 标记 finish 完成
+2. 必须立即调用 `Skill("autopilot-evolve")`
+
+警告：finish 之后跳过 evolve 是最常见的违规，知识沉淀是强制的。

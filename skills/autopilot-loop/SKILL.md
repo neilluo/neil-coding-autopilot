@@ -10,6 +10,14 @@ Outer Loop 遍历 Task 列表，Inner Loop 对每个 Task 执行 implement → c
 
 **宣告**: "正在使用 autopilot-loop 执行开发循环。"
 
+## 前置检查（自动执行）
+
+执行本 skill 前，必须确认：
+1. `.autopilot/progress.md` 存在
+2. 本阶段的前置阶段已标记 `[x]`：plan 必须已完成
+
+如果前置未满足，立即停止并提示需要先执行哪个阶段。
+
 ## 输入
 
 - `tasks.md` 文件（由 autopilot-plan 生成）
@@ -109,11 +117,8 @@ cat > /tmp/autopilot-task-N-prompt.md << 'EOF'
 [填充后的实现模板内容]
 EOF
 
-$AGENT_DISPATCH --model "$AUTOPILOT_IMPLEMENTER_MODEL" \
-  --cwd "$PROJECT_ROOT" \
-  --prompt-file /tmp/autopilot-task-N-prompt.md \
-  --instruction "执行附件中描述的开发任务" \
-  > /tmp/autopilot-task-N-result.md 2>&1
+# 模型选择说明：$AUTOPILOT_IMPLEMENTER_MODEL（当前 qodercli 不支持 model 参数，使用默认模型）
+qodercli -p "$(cat /tmp/autopilot-task-N-prompt.md)" --permission-mode bypass_permissions --max-turns 30 --output-format text 2>&1 | tail -20
 ```
 
 Prompt 文件内容由控制器根据 `./implementer-prompt.md` 模板 + Task 描述生成。
@@ -125,11 +130,8 @@ cat > /tmp/autopilot-task-N-review-prompt.md << 'EOF'
 [填充后的 review 模板内容]
 EOF
 
-$AGENT_DISPATCH --model "$AUTOPILOT_REVIEWER_MODEL" \
-  --cwd "$PROJECT_ROOT" \
-  --prompt-file /tmp/autopilot-task-N-review-prompt.md \
-  --instruction "执行附件中描述的 Code Review 任务" \
-  > /tmp/autopilot-task-N-review-result.md 2>&1
+# 模型选择说明：$AUTOPILOT_REVIEWER_MODEL（当前 qodercli 不支持 model 参数，使用默认模型）
+qodercli -p "$(cat /tmp/autopilot-task-N-review-prompt.md)" --permission-mode bypass_permissions --max-turns 30 --output-format text 2>&1 | tail -20
 ```
 
 Prompt 文件内容由控制器根据 `../autopilot-review/reviewer-prompt.md` 模板 + diff 生成。
@@ -141,11 +143,8 @@ cat > /tmp/autopilot-task-N-fix-prompt.md << 'EOF'
 [填充后的修复模板内容]
 EOF
 
-$AGENT_DISPATCH --model "$AUTOPILOT_FIXER_MODEL" \
-  --cwd "$PROJECT_ROOT" \
-  --prompt-file /tmp/autopilot-task-N-fix-prompt.md \
-  --instruction "执行附件中描述的修复任务" \
-  > /tmp/autopilot-task-N-fix-result.md 2>&1
+# 模型选择说明：$AUTOPILOT_FIXER_MODEL（当前 qodercli 不支持 model 参数，使用默认模型）
+qodercli -p "$(cat /tmp/autopilot-task-N-fix-prompt.md)" --permission-mode bypass_permissions --max-turns 30 --output-format text 2>&1 | tail -20
 ```
 
 Prompt 文件内容由控制器根据 `./implementer-prompt.md`（修复模板）+ 错误信息生成。
@@ -204,3 +203,11 @@ L3 Runtime Verification 流程：
 3. 执行 `$RUNTIME_VERIFY_CMD`（如 curl 测 API）
 4. `$RUNTIME_STOP_CMD` 停止服务
 5. 退出码非零 → FAIL
+
+## 强制后继（MANDATORY NEXT STEP）
+
+所有 Task 完成后：
+1. 调用 autopilot-checkpoint 标记 loop 完成
+2. 必须立即调用 `Skill("autopilot-finish")`
+
+不调用后继 = 流程中断，工作视为未完成。

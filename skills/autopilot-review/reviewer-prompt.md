@@ -73,11 +73,8 @@ cat > /tmp/autopilot-task-N-review-prompt.md << 'EOF'
 EOF
 
 # 2. 调度 reviewer
-$AGENT_DISPATCH --model "$AUTOPILOT_REVIEWER_MODEL" \
-  --cwd "$PROJECT_ROOT" \
-  --prompt-file /tmp/autopilot-task-N-review-prompt.md \
-  --instruction "执行附件中描述的 Code Review 任务" \
-  > /tmp/autopilot-task-N-review-result.md 2>&1
+# 模型选择说明：$AUTOPILOT_REVIEWER_MODEL（当前 qodercli 不支持 model 参数，使用默认模型）
+qodercli -p "$(cat /tmp/autopilot-task-N-review-prompt.md)" --permission-mode bypass_permissions --max-turns 30 --output-format text 2>&1 | tail -20
 
 # 3. 解析结果中的 REVIEW_PASS / REVIEW_FAIL
 cat /tmp/autopilot-task-N-review-result.md

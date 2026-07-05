@@ -89,11 +89,8 @@ cat > /tmp/autopilot-task-N-prompt.md << 'EOF'
 EOF
 
 # 2. 调度 worker
-$AGENT_DISPATCH --model "$AUTOPILOT_IMPLEMENTER_MODEL" \
-  --cwd "$PROJECT_ROOT" \
-  --prompt-file /tmp/autopilot-task-N-prompt.md \
-  --instruction "执行附件中描述的开发任务" \
-  > /tmp/autopilot-task-N-result.md 2>&1
+# 模型选择说明：$AUTOPILOT_IMPLEMENTER_MODEL（当前 qodercli 不支持 model 参数，使用默认模型）
+qodercli -p "$(cat /tmp/autopilot-task-N-prompt.md)" --permission-mode bypass_permissions --max-turns 30 --output-format text 2>&1 | tail -20
 
 # 3. 控制器读取结果并解析 Status
 cat /tmp/autopilot-task-N-result.md

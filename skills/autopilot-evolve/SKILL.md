@@ -9,6 +9,14 @@ description: "AGENTS.md自进化与知识沉淀。每次autopilot执行结束后
 
 **宣告**: "正在使用 autopilot-evolve 沉淀知识和进化 AGENTS.md。"
 
+## 前置检查（自动执行）
+
+执行本 skill 前，必须确认：
+1. `.autopilot/progress.md` 存在
+2. 本阶段的前置阶段已标记 `[x]`：finish 必须已完成
+
+如果前置未满足，立即停止并提示需要先执行哪个阶段。
+
 ## 路径约定
 
 知识库目录路径由目标项目的 AGENTS.md 定义，默认为 `harness/`。
@@ -166,3 +174,10 @@ head -20 AGENTS.md
 - 不删除已有规则（只归档或更新范围）
 - 不记录密码/密钥/个人信息
 - 每次 evolve 最多新增 3 条规则（防止膨胀）
+
+## 完成标记
+
+知识沉淀完成后：
+1. 调用 autopilot-checkpoint 标记 evolve 完成
+2. 检查 progress.md 所有阶段均为 `[x]`
+3. 输出最终 autopilot 完成报告

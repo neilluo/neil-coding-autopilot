@@ -9,6 +9,14 @@ description: "Task拆解与Plan编写。读取Spec，拆解为原子级Task列�
 
 **宣告**: "正在使用 autopilot-plan 进行任务拆解。"
 
+## 前置检查（自动执行）
+
+执行本 skill 前，必须确认：
+1. `.autopilot/progress.md` 存在
+2. 本阶段的前置阶段已标记 `[x]`：analyze 必须已完成
+
+如果前置未满足，立即停止并提示需要先执行哪个阶段。
+
 ## 输入
 
 - `SPEC.md` 文件路径（必须已存在）
@@ -106,3 +114,11 @@ git checkout -b autopilot/feature-name
   - CI/CD 配置修改
   - 外部 API/第三方服务集成
   - 删除操作
+
+## 强制后继（MANDATORY NEXT STEP）
+
+本阶段完成后：
+1. 调用 autopilot-checkpoint 标记 plan 完成
+2. 必须立即调用 `Skill("autopilot-loop")`
+
+不调用后继 = 流程中断，工作视为未完成。
