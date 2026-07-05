@@ -6,17 +6,47 @@ AI 全托管开发编排器 — 从需求到部署的全自动开发流水线。
 
 Neil Coding Autopilot 是一个 Qoder 插件，通过 qodercli 多进程编排实现全自动化开发流程。当前会话作为控制器，每个阶段通过独立 qodercli 实例执行，各实例可配置不同模型，context 完全隔离。
 
-## 流程
+## 架构
+
+```mermaid
+graph TB
+    U[用户需求] --> A[analyze]
+    A --> P[plan]
+    P --> L[loop]
+    L --> F[finish]
+    F --> E[evolve]
+    E --> D[Done]
+
+    subgraph "loop 内部循环 (per task)"
+        I[implementer] --> V[verify]
+        V --> R[reviewer]
+        R -->|有问题| FX[fixer]
+        FX --> V
+        R -->|通过| C[commit]
+    end
+
+    L --> I
+```
 
 ```
-用户需求 → analyze → plan → loop → finish → evolve → Done
+[控制器 - 当前会话]                        [Worker - 独立 qodercli 实例]
+  │                                          │
+  ├─ qodercli: analyze ──────────────────►  产出 SPEC.md
+  ├─ qodercli: plan ─────────────────────►  产出 tasks.md
+  ├─ loop (控制器自身遍历 tasks)
+  │     ├─ qodercli: implementer ────────►  写代码
+  │     ├─ verify (控制器执行编译) 
+  │     ├─ qodercli: reviewer ───────────►  Code Review
+  │     └─ qodercli: fixer ──────────────►  修复问题
+  ├─ qodercli: finish ───────────────────►  PR / merge
+  └─ qodercli: evolve ───────────────────►  知识沉淀
 ```
 
 | 阶段 | 职责 |
 |------|------|
 | **analyze** | 需求分析 + Spec 生成 + 多轮自检 |
 | **plan** | 读取 Spec → 拆解原子 Task → 写入 tasks.md |
-| **loop** | Outer Loop 遍历 Task，Inner Loop 调度 worker（implement → verify → review → fix → commit） |
+| **loop** | Outer Loop 遍历 Task，Inner Loop 调度 worker |
 | **finish** | 分支级合并（feature branch → main） |
 | **evolve** | AGENTS.md 自进化 + 知识沉淀 |
 
