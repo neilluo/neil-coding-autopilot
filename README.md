@@ -17,12 +17,16 @@ graph TB
     F --> E[evolve]
     E --> D[Done]
 
+    KB[(knowledge-base.md)] -.->|读取约束| A
+    E -.->|写入| KB
+
     subgraph "analyze 需求分析"
         A1[需求输入] --> A2[代码库理解]
-        A2 --> A3[Spec 草稿生成]
-        A3 --> A4[多轮自检]
-        A4 -->|不通过| A3
-        A4 -->|通过| A5[产出 SPEC.md]
+        A2 --> A3[加载知识库约束]
+        A3 --> A4[Spec 草稿生成]
+        A4 --> A5[多轮自检]
+        A5 -->|不通过| A4
+        A5 -->|通过| A6[产出 SPEC.md]
     end
 
     subgraph "plan Task拆解"
@@ -43,7 +47,7 @@ graph TB
     subgraph "evolve 知识沉淀"
         E1[收集 CR 发现] --> E2[规律提取]
         E2 --> E3[写回 AGENTS.md]
-        E3 --> E4[编译知识库]
+        E3 --> E4[编译 knowledge-base.md]
     end
 
     A --> A1
