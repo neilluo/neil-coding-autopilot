@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Context-injection hook for neil-coding-autopilot plugin.
+# Triggered as UserPromptSubmit hook on Qoder.
+set -euo pipefail
+
+MODE="${1:-auto}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Read bootstrap skill content
+bootstrap_content=$(cat "${PLUGIN_ROOT}/skills/using-neil-autopilot/SKILL.md" 2>&1 || echo "Error reading bootstrap skill")
+
+# Escape for JSON
+escape_for_json() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
+}
+
+bootstrap_escaped=$(escape_for_json "$bootstrap_content")
+session_context="<EXTREMELY_IMPORTANT>\nYou have neil-coding-autopilot capabilities.\n\n**Below is your bootstrap skill - follow it directly:**\n\n${bootstrap_escaped}\n</EXTREMELY_IMPORTANT>"
+
+if [ "$MODE" = "qoder" ]; then
+  # Qoder: UserPromptSubmit hook with session deduplication
+  qoder_input=""
+  if [ ! -t 0 ]; then
+    qoder_input=$(cat || true)
+  fi
+
+  raw_session_id=$(printf '%s' "$qoder_input" \
+    | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    | head -n1)
+
+  safe_session_id=$(printf '%s' "$raw_session_id" \
+    | LC_ALL=C tr -cd 'A-Za-z0-9._-' \
+    | cut -c1-64)
+
+  marker_dir="${TMPDIR:-/tmp}"
+  marker_dir="${marker_dir%/}"
+  if [ -n "$safe_session_id" ] && [ -d "$marker_dir" ] && [ -w "$marker_dir" ]; then
+    marker_file="${marker_dir}/.neil-autopilot-${safe_session_id}"
+    if [ -f "$marker_file" ]; then
+      printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "UserPromptSubmit",\n    "additionalContext": ""\n  }\n}\n'
+      exit 0
+    fi
+    : > "$marker_file" 2>/dev/null || true
+  fi
+
+  printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "UserPromptSubmit",\n    "additionalContext": "%s"\n  }\n}\n' "$session_context"
+else
+  # Generic fallback
+  printf '{\n  "additionalContext": "%s"\n}\n' "$session_context"
+fi
+
+exit 0

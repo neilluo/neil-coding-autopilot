@@ -1,0 +1,14 @@
+{
+  "name": "neil-coding-autopilot",
+  "version": "1.0.0",
+  "description": "AI全托管开发编排器 - 从需求到部署的全自动开发流水线",
+  "author": "neilluo",
+  "license": "MIT",
+  "keywords": [
+    "autopilot",
+    "ai-coding",
+    "loop-development",
+    "code-review",
+    "harness-engineering"
+  ]
+}

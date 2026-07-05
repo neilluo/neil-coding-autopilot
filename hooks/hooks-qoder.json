@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__PLUGIN_HOME__/hooks/session-start qoder"
+          }
+        ]
+      }
+    ]
+  }
+}
