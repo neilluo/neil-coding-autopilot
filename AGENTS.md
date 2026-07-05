@@ -24,11 +24,14 @@ implement(worker-cli) → verify(编译) → review(reviewer-cli) → fix(worker
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| AUTOPILOT_PLATFORM | auto | qoder / claude / codex / auto(自动检测) |
+| AUTOPILOT_PLATFORM | auto | qoder / claude / codex / auto(自动检测，优先级 qoder>claude>codex) |
 | AGENT_DISPATCH | scripts/dispatch.sh | 统一调度命令路径 |
+| AUTOPILOT_ANALYZE_MODEL | Ultimate | 需求分析阶段模型（需强推理） |
+| AUTOPILOT_PLAN_MODEL | Ultimate | Task 拆解阶段模型（需强推理） |
 | AUTOPILOT_IMPLEMENTER_MODEL | Performance | 编码型 worker 模型 |
 | AUTOPILOT_REVIEWER_MODEL | Ultimate | 审查型 worker 模型 |
 | AUTOPILOT_FIXER_MODEL | Performance | 修复型 worker 模型 |
+| AUTOPILOT_EVOLVE_MODEL | Ultimate | 知识沉淀阶段模型（需强归纳） |
 | AUTOPILOT_MAX_PARALLEL | 3 | 最大并行 Task 数 |
 
 **统一调度约定**:
