@@ -17,6 +17,21 @@ graph TB
     F --> E[evolve]
     E --> D[Done]
 
+    subgraph "analyze 需求分析"
+        A1[需求输入] --> A2[代码库理解]
+        A2 --> A3[Spec 草稿生成]
+        A3 --> A4[多轮自检]
+        A4 -->|不通过| A3
+        A4 -->|通过| A5[产出 SPEC.md]
+    end
+
+    subgraph "plan Task拆解"
+        P1[读取 SPEC.md] --> P2[依赖分析]
+        P2 --> P3[原子 Task 拆解]
+        P3 --> P4[排序 + 并行分组]
+        P4 --> P5[产出 tasks.md]
+    end
+
     subgraph "loop 内部循环 (per task)"
         I[implementer] --> V[verify]
         V --> R[reviewer]
@@ -25,7 +40,16 @@ graph TB
         R -->|通过| C[commit]
     end
 
+    subgraph "evolve 知识沉淀"
+        E1[收集 CR 发现] --> E2[规律提取]
+        E2 --> E3[写回 AGENTS.md]
+        E3 --> E4[编译知识库]
+    end
+
+    A --> A1
+    P --> P1
     L --> I
+    E --> E1
 ```
 
 ```
