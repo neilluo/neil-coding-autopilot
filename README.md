@@ -6,77 +6,40 @@ AI 全托管开发编排器 — 从需求到部署的全自动开发流水线。
 
 Neil Coding Autopilot 是一个 Qoder 插件，通过 qodercli 多进程编排实现全自动化开发流程。当前会话作为控制器，每个阶段通过独立 qodercli 实例执行，各实例可配置不同模型，context 完全隔离。
 
+**设计原则**：
+- 各 Skill 只负责自身业务逻辑，报告状态后退出
+- 路由、前置验证、调度约定统一在 `skills/_shared/conventions.md` 和控制器流程图中定义
+- `autopilot-checkpoint` 作为唯一门禁机制，在阶段间强制验证
+
 ## 架构
 
-```mermaid
-graph TB
-    U[用户需求] --> A[analyze]
-    A --> P[plan]
-    P --> L[loop]
-    L --> F[finish]
-    F --> E[evolve]
-    E --> D[Done]
-
-    KB[(knowledge-base.md)] -.->|读取约束| A
-    E -.->|写入| KB
-
-    subgraph "analyze 需求分析"
-        A1[需求输入] --> A2[代码库理解]
-        A2 --> A3[加载知识库约束]
-        A3 --> A4[Spec 草稿生成]
-        A4 --> A5[多轮自检]
-        A5 -->|不通过| A4
-        A5 -->|通过| A6[产出 SPEC.md]
-    end
-
-    subgraph "plan Task拆解"
-        P1[读取 SPEC.md] --> P2[依赖分析]
-        P2 --> P3[原子 Task 拆解]
-        P3 --> P4[排序 + 并行分组]
-        P4 --> P5[产出 tasks.md]
-    end
-
-    subgraph "loop 内部循环 (per task)"
-        I[implementer] --> V[verify]
-        V --> R[reviewer]
-        R -->|有问题| FX[fixer]
-        FX --> V
-        R -->|通过| C[commit]
-    end
-
-    subgraph "evolve 知识沉淀"
-        E1[收集 CR 发现] --> E2[规律提取]
-        E2 --> E3[写回 AGENTS.md]
-        E3 --> E4[编译 knowledge-base.md]
-    end
-
-    A --> A1
-    P --> P1
-    L --> I
-    E --> E1
+```
+用户需求 → init(条件) → explore(澄清) → analyze(Spec) → plan(Tasks) → loop(实现) → finish(合并+归档) → evolve(知识沉淀) → Done
 ```
 
 ```
 [控制器 - 当前会话]                        [Worker - 独立 qodercli 实例]
   │                                          │
-  ├─ qodercli: analyze ──────────────────►  产出 SPEC.md
-  ├─ qodercli: plan ─────────────────────►  产出 tasks.md
+  ├─ explore (控制器自身) ─────────────►  多轮交互→explore-notes.md
+  ├─ qodercli: analyze ──────────────►  产出 spec.md
+  ├─ qodercli: plan ─────────────────►  产出 tasks.md
   ├─ loop (控制器自身遍历 tasks)
-  │     ├─ qodercli: implementer ────────►  写代码
-  │     ├─ verify (控制器执行编译) 
-  │     ├─ qodercli: reviewer ───────────►  Code Review
-  │     └─ qodercli: fixer ──────────────►  修复问题
-  ├─ qodercli: finish ───────────────────►  PR / merge
-  └─ qodercli: evolve ───────────────────►  知识沉淀
+  │     ├─ qodercli: implementer ──────►  写代码
+  │     ├─ verify (控制器执行编译)
+  │     ├─ qodercli: reviewer ─────────►  Code Review
+  │     └─ qodercli: fixer ────────────►  修复问题
+  ├─ qodercli: finish ───────────────►  PR/merge + 归档
+  └─ qodercli: evolve ───────────────►  知识双层沉淀
 ```
 
 | 阶段 | 职责 |
 |------|------|
-| **analyze** | 需求分析 + Spec 生成 + 多轮自检 |
+| **explore** | 需求澄清 + 设计方向确认（强制多轮交互，HARD-GATE） |
+| **analyze** | 基于 explore 产出生成 Spec + 多轮自检 |
 | **plan** | 读取 Spec → 拆解原子 Task → 写入 tasks.md |
 | **loop** | Outer Loop 遍历 Task，Inner Loop 调度 worker |
-| **finish** | 分支级合并（feature branch → main） |
-| **evolve** | AGENTS.md 自进化 + 知识沉淀 |
+| **finish** | 分支合并 + 产物归档到 archive/ |
+| **evolve** | 知识三层沉淀（raw → ingest → wiki，Karpathy LLM Wiki） |
 
 ## 安装
 
@@ -132,13 +95,27 @@ python3 ~/.qoder/skills/neil-skill-installer/scripts/installer.py install \
 ├── hooks/                 # Session Hook（自动注入）
 ├── scripts/               # 调度脚本
 └── skills/                # 各阶段 Skill 定义
-    ├── autopilot-analyze/
-    ├── autopilot-plan/
-    ├── autopilot-loop/
-    ├── autopilot-review/
-    ├── autopilot-finish/
-    ├── autopilot-evolve/
-    └── using-neil-autopilot/
+    ├── _shared/                 # 共享约定（路径/调度/状态/路由）
+    ├── using-neil-autopilot/  # 入口编排器
+    ├── autopilot-init/       # 项目 Harness 初始化
+    ├── autopilot-explore/    # 需求澄清
+    ├── autopilot-analyze/    # Spec 生成
+    ├── autopilot-plan/       # Task 拆解
+    ├── autopilot-loop/       # 双层 Loop 执行器
+    ├── autopilot-review/     # Code Review
+    ├── autopilot-finish/     # 合并 + 归档
+    ├── autopilot-evolve/     # 知识沉淀
+    └── autopilot-checkpoint/ # 工作流门禁
+```
+
+**目标项目产物目录**（autopilot 执行时在目标项目中创建）：
+
+```
+autopilot/
+├── changes/<feature>/     # 活跃变更（spec + tasks + progress）
+├── archive/              # 已完成历史变更
+├── knowledge/            # 三层知识库（SCHEMA.md + raw/ + wiki/）
+└── hooks/                # 质量门禁（post-edit + build-gate + pre-completion）
 ```
 
 ## License

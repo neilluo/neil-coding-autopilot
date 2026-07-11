@@ -66,16 +66,7 @@ REVIEW_PASS 或 REVIEW_FAIL (有 CRITICAL/MAJOR 问题)
 
 ## 控制器调度方式
 
-```bash
-# 1. 生成 review prompt（控制器填充文件列表后写入）
-cat > /tmp/autopilot-task-N-review-prompt.md << 'EOF'
-[填充后的 review 模板内容]
-EOF
-
-# 2. 调度 reviewer
-# 模型选择说明：$AUTOPILOT_REVIEWER_MODEL（当前 qodercli 不支持 model 参数，使用默认模型）
-qodercli -p "$(cat /tmp/autopilot-task-N-review-prompt.md)" --permission-mode bypass_permissions --max-turns 30 --output-format text 2>&1 | tail -20
-
-# 3. 解析结果中的 REVIEW_PASS / REVIEW_FAIL
-cat /tmp/autopilot-task-N-review-result.md
-```
+按 `_shared/conventions.md` 中的 qodercli 调度模板执行：
+1. 控制器填充文件列表后写入 `/tmp/autopilot-task-N-review-prompt.md`
+2. 调度 reviewer（模型环境变量: `AUTOPILOT_REVIEWER_MODEL`）
+3. 解析结果中的 `REVIEW_PASS` / `REVIEW_FAIL`

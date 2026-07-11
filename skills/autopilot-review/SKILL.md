@@ -9,14 +9,6 @@ description: "Code Review执行器。使用OCR CLI对当前Task的代码变更�
 
 **宣告**: "正在使用 autopilot-review 执行 Code Review。"
 
-## 前置检查（自动执行）
-
-执行本 skill 前，必须确认：
-1. `.autopilot/progress.md` 存在
-2. 本 skill 在 loop 内部调用，无独立阶段检查，但 progress.md 必须存在
-
-如果 progress.md 不存在，立即停止并提示需要先初始化 autopilot 流程。
-
 ## 前置条件
 
 - OCR CLI 已安装并配置（`ocr` 命令可用）
@@ -64,15 +56,7 @@ git diff main > /tmp/task-diff.patch
 ocr review --diff /tmp/task-diff.patch
 ```
 
-如果 `ocr` 命令不可用，降级使用 qodercli reviewer 做 review：
-
-```bash
-# 模型选择说明：$AUTOPILOT_REVIEWER_MODEL（当前 qodercli 不支持 model 参数，使用默认模型）
-# 控制器生成 review prompt 后调度独立 reviewer 实例
-qodercli -p "$(cat /tmp/autopilot-task-N-review-prompt.md)" --permission-mode bypass_permissions --max-turns 30 --output-format text 2>&1 | tail -20
-```
-
-Prompt 模板见 `./reviewer-prompt.md`。
+如果 `ocr` 命令不可用，降级使用 qodercli reviewer（按 `_shared/conventions.md` 中的调度模板，使用 `./reviewer-prompt.md` 作为 prompt 模板）。
 
 ### Step 3: 解析结果
 

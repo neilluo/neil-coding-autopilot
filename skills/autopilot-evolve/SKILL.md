@@ -9,33 +9,26 @@ description: "AGENTS.md自进化与知识沉淀。每次autopilot执行结束后
 
 **宣告**: "正在使用 autopilot-evolve 沉淀知识和进化 AGENTS.md。"
 
-## 前置检查（自动执行）
-
-执行本 skill 前，必须确认：
-1. `.autopilot/progress.md` 存在
-2. 本阶段的前置阶段已标记 `[x]`：finish 必须已完成
-
-如果前置未满足，立即停止并提示需要先执行哪个阶段。
-
 ## 路径约定
 
-知识库目录路径由目标项目的 AGENTS.md 定义，默认为 `harness/`。
-控制器在调度前读取目标项目 AGENTS.md 中的 `harness_dir` 配置，如未定义则使用默认值。
+知识库目录路径统一为 `$KNOWLEDGE_DIR`（即 `autopilot/knowledge/`）。
 
-```bash
-# 控制器读取项目配置，确定 harness 目录
-HARNESS_DIR=$(grep -oP 'harness_dir:\s*\K\S+' AGENTS.md 2>/dev/null || echo "harness")
-```
+三层结构：
+- `$KNOWLEDGE_DIR/SCHEMA.md` — 维护规则 + 项目元数据
+- `$KNOWLEDGE_DIR/raw/` — Layer 1: 不可变源（CR发现/踩坑原始记录）
+- `$KNOWLEDGE_DIR/wiki/` — Layer 2: LLM 编译产物（entities/concepts/guides/comparisons）
+- `$KNOWLEDGE_DIR/references/` — 静态框架性内容
 
-下文中所有路径使用 `$HARNESS_DIR` 引用。
-
-## 核心设计：知识反哺闭环
+## 核心设计：Karpathy LLM Wiki 三层反哺闭环
 
 ```
-analyze(读取 KB) → plan → loop → review(发现问题) → evolve(写回 KB) → 下次 analyze(读取更新后的 KB)
+explore(读 wiki/index.md) → analyze(读 wiki 相关页) → plan → loop → review(发现问题)
+     ↑                                                                    │
+     └───────────── evolve(写 raw → ingest → 更新 wiki) ────────────────┘
 ```
 
-evolve 的产出直接成为 analyze 的输入，形成闭环。
+evolve 的核心流程：**先写 raw（不可变证据），再编译到 wiki（结构化知识）**。
+不允许直接修改 wiki 页面而不留 raw 源。
 
 ## 触发条件
 
@@ -52,132 +45,116 @@ evolve 的产出直接成为 analyze 的输入，形成闭环。
 3. **Task BLOCKED** — 阻塞原因和解决方式
 4. **新增模块** — 代码架构变更
 
-### Step 2: 分类决策
+### Step 2: 写入 raw/（不可变源）
 
-对每条经验做出决策：
+将每条经验作为原始证据写入 `$KNOWLEDGE_DIR/raw/`：
 
-| 经验类型 | 去向 | 条件 |
-|----------|------|------|
-| 规律性代码问题 | `$HARNESS_DIR/rules/` | 出现2+次的同类问题 |
-| 架构/模块变更 | `AGENTS.md` | 新增了模块或改变了项目结构 |
-| 踩坑记录 | `$HARNESS_DIR/memory/learnings.md` | 非显而易见的发现 |
-| 一次性问题 | 不记录 | 不可复用的特例 |
+**文件命名**: `{YYYYMMDD}-{slug}.md`
 
-### Step 3: 执行进化
+**格式**:
+```markdown
+---
+created: YYYY-MM-DD
+source: evolve/cr-round-N | evolve/compile-failure | evolve/task-blocked
+evidence: primary
+---
 
-**3a. AGENTS.md 更新**（如有架构变更）:
+# [Topic]
+
+## Problem
+[问题描述]
+
+## Solution
+[解决方式]
+
+## Lesson
+[可复用的教训]
+```
+
+同时更新 `$KNOWLEDGE_DIR/wiki/inbox.md` 状态为 pending。
+
+### Step 3: Ingest（raw → wiki 编译）
+
+对每个新写入的 raw 文件执行 2-Step CoT 编译：
+
+**Stage 1 — 分析**：读取 raw 文件，确定：
+- 应归入哪个 wiki 分类（entities/concepts/guides/comparisons）
+- 是创建新页还是更新现有页
+- 相关的现有 wiki 页面（交叉引用）
+
+**Stage 2 — 生成/更新**：
+- 创建或更新对应 wiki 页面（带 frontmatter）
+- 维护 [[wikilink]] 交叉引用
+- 更新 `wiki/index.md` 导航
+
+**分类决策表**：
+
+| 经验类型 | wiki 分类 | 示例 |
+|----------|-----------|------|
+| 新发现的项目约束/设计原则 | concepts/ | retry-mechanism.md |
+| 规律性代码问题 | guides/ | backend-rules.md (追加规则) |
+| 架构/模块变更 | entities/ | new-module.md |
+| 踩坑记录 | guides/ | pitfall-{topic}.md |
+| 方案对比 | comparisons/ | solution-a-vs-b.md |
+
+**回写门禁（防幻觉传播）**：
+- 必须有明确来源（raw 文件/官方文档 URL）— **无源不写**
+- 纯推理内容标注 `[inferred]`，不得标注 `[primary]`
+- 与现有 wiki 矛盾时标注 `[disputed]`，不直接覆盖
+- inferred 内容占比不超过 30%
+
+### Step 4: 更新操作日志
+
+更新 `$KNOWLEDGE_DIR/wiki/log.md`：
+
+```markdown
+| YYYY-MM-DD | Evolve | 新增 N 条 raw，更新 M 页 wiki，新建 K 页 |
+```
+
+更新 `$KNOWLEDGE_DIR/wiki/inbox.md`：将 pending 改为 done。
+
+### Step 5: SCHEMA.md 更新（如有新约束/原则）
+
+如果发现新的项目约束或设计原则，追加到 SCHEMA.md 的对应段落：
 
 ```bash
-# 检查 AGENTS.md 当前行数
+# 检查 SCHEMA.md 行数
+wc -l $KNOWLEDGE_DIR/SCHEMA.md
+# 超过 200 行则要精简（将细节移入 wiki 页面）
+```
+
+### Step 6: AGENTS.md 更新（如有架构变更）
+
+```bash
 wc -l AGENTS.md
-# 如果超过 200 行，先执行衰减
+# 超过 150 行则精简（细节移入 wiki/entities/）
 ```
 
-**200行上限规则**:
-- AGENTS.md 不超过 200 行
-- 超过时：将细节移入 `$HARNESS_DIR/docs/`，AGENTS.md 只保留指针
-- 旧条目超过 30 天未被引用 → 移入 `$HARNESS_DIR/memory/archive/`
+### Step 7: Lint 建议（条件触发）
 
-更新内容示例：
-```markdown
-## Project Structure（更新模块列表）
-## Key Commands（更新构建命令）
-## Doc Navigation（更新文件导航表）
-```
+检查 `wiki/log.md` 中的 evolve 次数。每 5 次 evolve 后输出建议：
 
-**3b. Rules 更新**（如有规律性问题）:
+> "建议执行知识库健康检查（lint）：检测矛盾/过时/孤立页/缺页/断链"
 
-写入 `$HARNESS_DIR/rules/backend-rules.md`（或对应的规则文件）：
 
-```markdown
-## [新规则名称]
-**Do**: [正确做法 + 代码示例]
-**Don't**: [错误做法]
-**Self-check**: [自检方式]
-```
-
-**3c. Learnings 追加**（如有踩坑）:
-
-追加到 `$HARNESS_DIR/memory/learnings.md`：
-
-```markdown
-## YYYY-MM-DD - [Topic]
-**Problem**: [问题描述]
-**Solution**: [解决方式]
-**Lesson**: [可复用的教训]
-```
-
-### Step 4: 编译知识库（核心步骤）
-
-将分散的 rules + learnings 编译为结构化知识库文件，供下次 analyze 直接读取：
-
-**文件位置**: `$HARNESS_DIR/knowledge-base.md`
-
-**编译逻辑**:
-1. 读取所有 `$HARNESS_DIR/rules/*.md` 的规则
-2. 读取 `$HARNESS_DIR/memory/learnings.md` 的踩坑
-3. 提取对 Spec 生成有指导价值的条目，编译为以下格式：
-
-```markdown
-# Project Knowledge Base
-
-> Auto-compiled by autopilot-evolve. Read by autopilot-analyze to reduce Spec hallucination.
-> Last updated: YYYY-MM-DD
-
-## 已验证的技术决策
-
-- [decision]: [rationale] (来源: Task N / CR)
-
-## 必须遵守的编码规则
-
-- [rule]: [do/don't] (原因: 出现过 N 次同类问题)
-
-## 已知坑点
-
-- [pitfall]: [workaround] (发现时间)
-
-## 项目约束（Spec 生成时必须考虑）
-
-- [constraint]: [reason]
-```
-
-**关键设计**:
-- 知识库是 **编译产物**，不是原始材料。原始材料在 rules/ 和 learnings.md
-- 每次 evolve 重新编译整个文件（而非追加），保证内容不膨胀
-- 上限 100 行，超过时只保留最高价值条目
-- analyze 读取这个文件后，将内容作为 Spec 生成的约束条件
-
-### Step 5: 验证进化结果
-
-```bash
-# AGENTS.md 不超过 200 行
-wc -l AGENTS.md | awk '{if ($1 > 200) print "WARNING: AGENTS.md exceeds 200 lines"}'
-
-# 语法检查（确保 Markdown 格式正确）
-head -20 AGENTS.md
-```
-
-### Step 6: 输出
+### Step 8: 输出
 
 - 状态: `EVOLVE_STATUS=DONE`
-- 汇总: "新增 X 条规则，更新 AGENTS.md Y 处，记录 Z 条踩坑，知识库已重新编译"
-
-## 衰减机制
-
-每次执行 evolve 时，检查 `$HARNESS_DIR/memory/learnings.md`：
-- 超过 50 条 → 将最旧的 10 条移到 `archive/`
-- 最近 3 个月没有相关代码变更的规则 → 标记为候选归档
+- 汇总: "新增 X 条 raw，更新 Y 页 wiki，新建 Z 页，SCHEMA 更新 W 处"
 
 ## 约束
 
-- AGENTS.md 绝对不超过 200 行
-- 不删除已有规则（只归档或更新范围）
+- SCHEMA.md 不超过 200 行
+- AGENTS.md 不超过 150 行
+- 不删除已有 wiki 页面（只更新或归档）
 - 不记录密码/密钥/个人信息
-- 每次 evolve 最多新增 3 条规则（防止膨胀）
+- 每次 evolve 单次 ingest 不超过 15 页更新
+- raw/ 文件一旦写入不可修改（append-only 语义）
+- 回写门禁严格执行：无源不写、推理标 [inferred]、矛盾标 [disputed]
 
-## 完成标记
+## 完成报告
 
 知识沉淀完成后：
-1. 调用 autopilot-checkpoint 标记 evolve 完成
-2. 检查 progress.md 所有阶段均为 `[x]`
-3. 输出最终 autopilot 完成报告
+1. 报告 `EVOLVE_STATUS=DONE`
+2. 输出最终 autopilot 完成报告（控制器根据状态决定后续清理）
+

@@ -5,23 +5,16 @@ description: "需求分析与Spec生成。当收到新需求（自然语言/GitH
 
 # Autopilot Analyze — 需求分析与 Spec 生成
 
-将模糊的需求转化为精确的技术方案 Spec，并经过多轮自检确保质量。
+基于 explore 阶段的澄清结果和知识库约束，生成精确的技术方案 Spec，并经过多轮自检确保质量。
 
-**宣告**: "正在使用 autopilot-analyze 进行需求分析和 Spec 生成。"
-
-## 前置检查（自动执行）
-
-执行本 skill 前，必须确认：
-1. `.autopilot/progress.md` 存在
-2. 本阶段的前置阶段已标记 `[x]`（analyze 无前置，仅需确认 progress.md 存在）
-
-如果前置未满足，立即停止并提示需要先执行哪个阶段。
+**宣告**: "正在使用 autopilot-analyze 进行 Spec 生成。"
 
 ## 输入
 
-- 自然语言需求描述，或
-- GitHub Issue URL，或
-- 已有的 AGENTS.md / 项目上下文
+- `$CHANGE_DIR/explore-notes.md`（explore 阶段的澄清记录和设计方向）
+- `$KNOWLEDGE_DIR/SCHEMA.md`（项目约束 + 设计原则 + 各阶段规则）
+- `$KNOWLEDGE_DIR/wiki/index.md`（知识库导航，按需读取相关 wiki 页面）
+- AGENTS.md / 项目上下文
 
 ## Process
 
@@ -51,51 +44,39 @@ digraph analyze {
 
 ### Step 1: 上下文收集
 
-#### Step 1a: 项目配置
+#### Step 1a: 读取 explore 阶段产出
 
 ```bash
-# 读取项目上下文
+# 读取澄清记录（explore 阶段的核心产出）
+cat $CHANGE_DIR/explore-notes.md
+```
+
+explore-notes.md 包含：项目现状摘要、澄清记录、方案选择、设计方向确认。
+
+#### Step 1b: 读取知识库（三层 Wiki）
+
+```bash
+# SCHEMA: 项目约束、设计原则、各阶段规则
+cat $KNOWLEDGE_DIR/SCHEMA.md 2>/dev/null || echo "No SCHEMA yet"
+
+# Wiki 导航: 定位相关知识页面
+cat $KNOWLEDGE_DIR/wiki/index.md 2>/dev/null || echo "No wiki index yet"
+
+# 按需读取相关 wiki 页面（guides/concepts/entities）
+# 例如: cat $KNOWLEDGE_DIR/wiki/guides/backend-rules.md
+# 例如: cat $KNOWLEDGE_DIR/wiki/concepts/retry-mechanism.md
+```
+
+#### Step 1c: 项目配置
+
+```bash
 cat AGENTS.md 2>/dev/null || echo "No AGENTS.md"
-cat SPEC.md 2>/dev/null || echo "No existing SPEC.md"
-```
-
-#### Step 1b: 代码结构理解（代码本体 = 最高权威）
-
-如果项目配置了代码分析工具（`$CODE_ANALYZER_CMD`）：
-
-```bash
-# 获取全局架构（模块布局、入口点、热点函数、文件树）
-$CODE_ANALYZER_CMD get_architecture
-
-# 搜索与需求相关的已有代码
-$CODE_SEARCH_CMD "需求关键词"
-
-# 追踪关键函数的调用链（如需）
-$CODE_ANALYZER_CMD trace_path --function "关键函数名"
-```
-
-如果未配置代码分析工具，降级为目录扫描 + 文件读取：
-
-```bash
-# 降级方案：目录结构 + 入口文件
-ls -la src/ 2>/dev/null || ls -la */src/ 2>/dev/null || echo "No src directory yet"
-cat src/index.* src/main.* src/app.* 2>/dev/null || echo "No entry file found"
-```
-
-#### Step 1c: 知识库约束（经验沉淀 = 防御红线）
-
-```bash
-# 读取知识库（由 evolve 阶段积累，用于减少 Spec 幻觉）
-HARNESS_DIR=$(grep -oP 'harness_dir:\s*\K\S+' AGENTS.md 2>/dev/null || echo "harness")
-cat $HARNESS_DIR/rules/*.md 2>/dev/null || echo "No rules yet"
-cat $HARNESS_DIR/memory/learnings.md 2>/dev/null || echo "No learnings yet"
-cat $HARNESS_DIR/knowledge-base.md 2>/dev/null || echo "No knowledge base yet"
 ```
 
 收集优先级（冲突时以高优先级为准）：
-1. **代码本体**（Step 1b）— 实时真相，最高权威
-2. **知识库**（Step 1c）— 历史经验，约束红线
-3. **项目配置**（Step 1a）— 技术栈和构建命令
+1. **explore 产出**（Step 1a）— 用户确认的设计方向，最高权威
+2. **知识库约束**（Step 1b）— SCHEMA.md 约束 + wiki 经验
+3. **项目配置**（Step 1c）— 技术栈和构建命令
 
 ### Step 2: 需求调研（可选）
 
@@ -105,13 +86,13 @@ cat $HARNESS_DIR/knowledge-base.md 2>/dev/null || echo "No knowledge base yet"
 
 ### Step 3: 生成 Spec
 
-**Spec 文件**: 写入项目根目录 `SPEC.md`（或追加章节）
+**Spec 文件**: 写入 `$CHANGE_DIR/spec.md`
 
-**知识库约束**（如果 Step 1 读取到了 $HARNESS_DIR/knowledge-base.md）:
-- Spec 中的技术决策必须与知识库中「已验证的技术决策」保持一致，除非新需求明确要求推翻
-- Spec 必须遵守知识库中「必须遵守的编码规则」，在相关设计中显式体现
-- Spec 必须规避知识库中「已知坑点」，在设计中主动防御
-- Spec 必须满足知识库中「项目约束」
+**知识库约束**（基于 Step 1b 读取的内容）:
+- Spec 必须与 SCHEMA.md 中的 `Constraints` 和 `Design Principles` 保持一致
+- Spec 必须遵守 SCHEMA.md 中 `Per-Stage Rules / spec` 定义的规则
+- Spec 必须规避 wiki/guides/ 和 wiki/concepts/ 中记录的「已知坑点」
+- Spec 必须与 explore-notes.md 中确认的设计方向一致
 
 **Spec 必须包含**:
 1. 项目概述 + 用户故事
@@ -132,18 +113,12 @@ cat $HARNESS_DIR/knowledge-base.md 2>/dev/null || echo "No knowledge base yet"
 | 第2轮 | 用户体验、部署运维、成本 |
 | 第3轮 | 边界情况、扩展性、MVP聚焦度 |
 
-**自检方式**: 使用独立 qodercli worker 做审查：
+**自检方式**: 控制器按 `_shared/conventions.md` 中的调度模板生成自检 prompt，调度独立审查实例执行。
 
-```bash
-# 模型选择说明：$AUTOPILOT_REVIEWER_MODEL（当前 qodercli 不支持 model 参数，使用默认模型）
-# 控制器生成自检 prompt 后调度独立审查实例
-qodercli -p "$(cat /tmp/autopilot-spec-review-N.md)" --permission-mode bypass_permissions --max-turns 30 --output-format text 2>&1 | tail -20
-```
-
-### Step 5: 输出
+## 输出
 
 - 状态: `ANALYZE_STATUS=DONE` 或 `ANALYZE_STATUS=BLOCKED|{原因}`
-- 产物: `SPEC.md` 已写入项目根目录
+- 产物: `$CHANGE_DIR/spec.md` 已写入
 - 自检报告: 输出修复了多少 Critical/Major/Minor 问题
 
 ## 约束
@@ -153,10 +128,3 @@ qodercli -p "$(cat /tmp/autopilot-spec-review-N.md)" --permission-mode bypass_pe
 - ext_info 内必须包含 traceId
 - 不做多用户设计（除非需求明确要求）
 
-## 强制后继（MANDATORY NEXT STEP）
-
-本阶段完成后：
-1. 调用 autopilot-checkpoint 标记 analyze 完成
-2. 必须立即调用 `Skill("autopilot-plan")`
-
-不调用后继 = 流程中断，工作视为未完成。

@@ -18,7 +18,7 @@ description: "工作流门禁检查。验证 progress.md 中前置阶段已完�
 ### Step 1: 读取 Progress 文件
 
 ```bash
-cat .autopilot/progress.md
+cat $CHANGE_DIR/progress.md
 ```
 
 如果文件不存在 → CHECKPOINT_STATUS=FAIL，提示"progress.md 缺失，请先初始化 autopilot 流程"
@@ -29,7 +29,9 @@ cat .autopilot/progress.md
 
 | 当前阶段 | 必须已完成的前置 |
 |---------|---------------|
-| analyze | (无前置) |
+| init | (无前置) |
+| explore | init |
+| analyze | explore |
 | plan | analyze |
 | loop | plan |
 | review | (被 loop 内部调用，无独立检查) |

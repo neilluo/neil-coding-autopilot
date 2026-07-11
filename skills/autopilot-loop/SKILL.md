@@ -10,17 +10,9 @@ Outer Loop 遍历 Task 列表，Inner Loop 对每个 Task 执行 implement → c
 
 **宣告**: "正在使用 autopilot-loop 执行开发循环。"
 
-## 前置检查（自动执行）
-
-执行本 skill 前，必须确认：
-1. `.autopilot/progress.md` 存在
-2. 本阶段的前置阶段已标记 `[x]`：plan 必须已完成
-
-如果前置未满足，立即停止并提示需要先执行哪个阶段。
-
 ## 输入
 
-- `tasks.md` 文件（由 autopilot-plan 生成）
+- `$CHANGE_DIR/tasks.md`（由 autopilot-plan 生成）
 - 验证命令（从 tasks.md 头部读取）
 
 ## Architecture
@@ -107,47 +99,17 @@ digraph loop {
 4. **状态落盘** — 每个 Task 完成/失败后更新 tasks.md
 5. **失败快速** — 连续 3 次失败即 BLOCKED，不无限重试
 
-## qodercli 调度方式
+## qodercli Worker 调度
 
-### Implementer Worker
+所有 worker 均按 `_shared/conventions.md` 中的调度模板执行，差异仅在 prompt 文件内容：
 
-```bash
-# 将 prompt 写入临时文件
-cat > /tmp/autopilot-task-N-prompt.md << 'EOF'
-[填充后的实现模板内容]
-EOF
+| Worker 类型 | Prompt 模板来源 | 模型环境变量 |
+|------------|-----------------|------------------|
+| Implementer | `./implementer-prompt.md`（实现模板） | AUTOPILOT_IMPLEMENTER_MODEL |
+| Reviewer | `../autopilot-review/reviewer-prompt.md` | AUTOPILOT_REVIEWER_MODEL |
+| Fixer | `./implementer-prompt.md`（修复模板） | AUTOPILOT_FIXER_MODEL |
 
-# 模型选择说明：$AUTOPILOT_IMPLEMENTER_MODEL（当前 qodercli 不支持 model 参数，使用默认模型）
-qodercli -p "$(cat /tmp/autopilot-task-N-prompt.md)" --permission-mode bypass_permissions --max-turns 30 --output-format text 2>&1 | tail -20
-```
-
-Prompt 文件内容由控制器根据 `./implementer-prompt.md` 模板 + Task 描述生成。
-
-### Reviewer Worker
-
-```bash
-cat > /tmp/autopilot-task-N-review-prompt.md << 'EOF'
-[填充后的 review 模板内容]
-EOF
-
-# 模型选择说明：$AUTOPILOT_REVIEWER_MODEL（当前 qodercli 不支持 model 参数，使用默认模型）
-qodercli -p "$(cat /tmp/autopilot-task-N-review-prompt.md)" --permission-mode bypass_permissions --max-turns 30 --output-format text 2>&1 | tail -20
-```
-
-Prompt 文件内容由控制器根据 `../autopilot-review/reviewer-prompt.md` 模板 + diff 生成。
-
-### Fixer Worker
-
-```bash
-cat > /tmp/autopilot-task-N-fix-prompt.md << 'EOF'
-[填充后的修复模板内容]
-EOF
-
-# 模型选择说明：$AUTOPILOT_FIXER_MODEL（当前 qodercli 不支持 model 参数，使用默认模型）
-qodercli -p "$(cat /tmp/autopilot-task-N-fix-prompt.md)" --permission-mode bypass_permissions --max-turns 30 --output-format text 2>&1 | tail -20
-```
-
-Prompt 文件内容由控制器根据 `./implementer-prompt.md`（修复模板）+ 错误信息生成。
+控制器根据模板填充变量后写入 `/tmp/autopilot-task-N-{type}.md`，再按约定模板调度。
 
 ## Git Commit 规范
 
@@ -160,7 +122,7 @@ git commit -m "feat(task-N): [task name]"
 ## 输出
 
 - 状态: `LOOP_STATUS=DONE` 或 `LOOP_STATUS=BLOCKED|Task N: {原因}`
-- 产物: tasks.md 中所有 Task 状态已更新
+- 产物: `$CHANGE_DIR/tasks.md` 中所有 Task 状态已更新
 - 汇总: "N/M Tasks 完成，共 X 轮迭代"
 
 ## 并行执行（可选）
@@ -189,6 +151,21 @@ git commit -m "feat(task-N): [task name]"
    - `retry with: <修改指令>` → 重新执行 implement
 3. 只有收到 `continue` 后才进入 review 阶段
 
+## 验证命令变量约定
+
+所有验证相关命令从 `$CHANGE_DIR/tasks.md` 头部解析，控制器进入 loop 前必须完成：
+
+| 变量 | tasks.md 头部字段 | 必选 |
+|------|------------------|------|
+| $VERIFY_CMD | `Verify command: ...` | 是 |
+| $TEST_CMD | `Test command: ...` | 否 |
+| $RUNTIME_START_CMD | `Runtime start: ...` | 否 |
+| $RUNTIME_VERIFY_CMD | `Runtime verify: ...` | 否 |
+| $HEALTH_CHECK_URL | `Health check URL: ...` | 否 |
+| $RUNTIME_STOP_CMD | `Runtime stop: ...` | 否 |
+
+若某层级缺失（如无测试命令），则只执行已定义的层级。
+
 ## 验证层级
 
 | 层级 | 方式 | 使用条件 |
@@ -204,10 +181,3 @@ L3 Runtime Verification 流程：
 4. `$RUNTIME_STOP_CMD` 停止服务
 5. 退出码非零 → FAIL
 
-## 强制后继（MANDATORY NEXT STEP）
-
-所有 Task 完成后：
-1. 调用 autopilot-checkpoint 标记 loop 完成
-2. 必须立即调用 `Skill("autopilot-finish")`
-
-不调用后继 = 流程中断，工作视为未完成。

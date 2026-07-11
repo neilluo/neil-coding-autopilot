@@ -9,25 +9,19 @@ description: "Task拆解与Plan编写。读取Spec，拆解为原子级Task列�
 
 **宣告**: "正在使用 autopilot-plan 进行任务拆解。"
 
-## 前置检查（自动执行）
-
-执行本 skill 前，必须确认：
-1. `.autopilot/progress.md` 存在
-2. 本阶段的前置阶段已标记 `[x]`：analyze 必须已完成
-
-如果前置未满足，立即停止并提示需要先执行哪个阶段。
-
 ## 输入
 
-- `SPEC.md` 文件路径（必须已存在）
+- `$CHANGE_DIR/spec.md`（必须已存在，bugfix 模式为轻量版 spec）
 - 项目技术栈信息（从 AGENTS.md 或 pom.xml/package.json）
+- `$KNOWLEDGE_DIR/SCHEMA.md` 中的 Per-Stage Rules / tasks 规则
+- `$KNOWLEDGE_DIR/wiki/guides/` 中与 Task 拆解相关的规则页
 
 ## Process
 
 ### Step 1: 读取 Spec
 
 ```bash
-cat SPEC.md   # 完整读取，不截断
+cat $CHANGE_DIR/spec.md   # 完整读取，不截断
 ```
 
 ### Step 2: 确定构建验证命令
@@ -55,7 +49,7 @@ cat SPEC.md   # 完整读取，不截断
 
 ### Step 4: 写入 tasks.md
 
-**文件位置**: 项目根目录 `tasks.md`
+**文件位置**: `$CHANGE_DIR/tasks.md`
 
 **格式**:
 
@@ -98,7 +92,7 @@ git checkout -b autopilot/feature-name
 ### Step 6: 输出
 
 - 状态: `PLAN_STATUS=DONE`
-- 产物: `tasks.md` 已写入项目根目录
+- 产物: `$CHANGE_DIR/tasks.md` 已写入
 - 汇总: "共拆解 N 个 Task，预计 AI 执行时间 X 小时"
 
 ## 约束
@@ -114,11 +108,3 @@ git checkout -b autopilot/feature-name
   - CI/CD 配置修改
   - 外部 API/第三方服务集成
   - 删除操作
-
-## 强制后继（MANDATORY NEXT STEP）
-
-本阶段完成后：
-1. 调用 autopilot-checkpoint 标记 plan 完成
-2. 必须立即调用 `Skill("autopilot-loop")`
-
-不调用后继 = 流程中断，工作视为未完成。

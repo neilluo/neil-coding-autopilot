@@ -82,16 +82,7 @@
 
 ## 控制器调度方式
 
-```bash
-# 1. 生成 prompt 文件（控制器填充模板变量后写入）
-cat > /tmp/autopilot-task-N-prompt.md << 'EOF'
-[填充后的实现模板内容]
-EOF
-
-# 2. 调度 worker
-# 模型选择说明：$AUTOPILOT_IMPLEMENTER_MODEL（当前 qodercli 不支持 model 参数，使用默认模型）
-qodercli -p "$(cat /tmp/autopilot-task-N-prompt.md)" --permission-mode bypass_permissions --max-turns 30 --output-format text 2>&1 | tail -20
-
-# 3. 控制器读取结果并解析 Status
-cat /tmp/autopilot-task-N-result.md
-```
+按 `_shared/conventions.md` 中的 qodercli 调度模板执行：
+1. 控制器填充上述模板变量后写入 `/tmp/autopilot-task-N-prompt.md`
+2. 调度 worker（模型环境变量: `AUTOPILOT_IMPLEMENTER_MODEL` / `AUTOPILOT_FIXER_MODEL`）
+3. 控制器解析结果中的 Status 行

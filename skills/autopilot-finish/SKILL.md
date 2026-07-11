@@ -9,21 +9,13 @@ description: "分支完成与合并。所有Task完成后，创建PR或直接合
 
 **宣告**: "正在使用 autopilot-finish 完成分支合并。"
 
-## 前置检查（自动执行）
-
-执行本 skill 前，必须确认：
-1. `.autopilot/progress.md` 存在
-2. 本阶段的前置阶段已标记 `[x]`：loop 必须已完成
-
-如果前置未满足，立即停止并提示需要先执行哪个阶段。
-
 ## Process
 
 ### Step 1: 验证所有 Task 完成
 
 ```bash
 # 确认 tasks.md 中没有 PENDING/IN_PROGRESS 状态
-grep -c "Status: PENDING\|Status: IN_PROGRESS" tasks.md
+grep -c "Status: PENDING\|Status: IN_PROGRESS" $CHANGE_DIR/tasks.md
 # 期望输出: 0
 ```
 
@@ -32,9 +24,17 @@ grep -c "Status: PENDING\|Status: IN_PROGRESS" tasks.md
 ### Step 2: 最终验证
 
 ```bash
-# 运行完整的验证命令
-mvn compile -q   # 或项目对应的构建命令
-mvn test -q      # 如果有测试
+# 优先使用 tasks.md 头部的验证命令（与 loop 阶段保持一致）
+VERIFY_CMD=$(grep -m1 "Verify command:" $CHANGE_DIR/tasks.md | sed 's/Verify command: //')
+TEST_CMD=$(grep -m1 "Test command:" $CHANGE_DIR/tasks.md | sed 's/Test command: //')
+
+# 编译验证（必须）
+${VERIFY_CMD}
+
+# 测试验证（如有配置）
+if [ -n "${TEST_CMD}" ]; then
+  ${TEST_CMD}
+fi
 
 # 确认没有未提交的修改
 git status --porcelain
@@ -75,10 +75,37 @@ git push origin main
 gh run list --limit 1
 ```
 
-### Step 6: 输出
+### Step 6: 归档变更产物
+
+将本次变更的产物归档到 archive 目录：
+
+```bash
+DATE=$(date +%Y-%m-%d)
+FEATURE_NAME=<current-feature-name>
+
+# 创建归档目录
+mkdir -p $ARCHIVE_DIR/${DATE}-${FEATURE_NAME}
+
+# 复制产物到归档（保留原件直到 evolve 完成后再清理）
+cp $CHANGE_DIR/spec.md $ARCHIVE_DIR/${DATE}-${FEATURE_NAME}/
+cp $CHANGE_DIR/tasks.md $ARCHIVE_DIR/${DATE}-${FEATURE_NAME}/
+cp $CHANGE_DIR/explore-notes.md $ARCHIVE_DIR/${DATE}-${FEATURE_NAME}/ 2>/dev/null || true
+
+# 生成完成摘要
+cat > $ARCHIVE_DIR/${DATE}-${FEATURE_NAME}/summary.md << EOF
+# ${FEATURE_NAME} - 完成摘要
+
+- 完成时间: ${DATE}
+- Task 数: [N]
+- PR/合并: [PR URL 或 commit hash]
+- 关键决策: [从 explore-notes 提取]
+EOF
+```
+
+### Step 7: 输出
 
 - 状态: `FINISH_STATUS=DONE`
-- 产物: PR URL 或合并 commit hash
+- 产物: PR URL 或合并 commit hash，归档目录已创建
 - 如果有 CI/CD: 报告 workflow 运行状态
 
 ## 约束
@@ -87,10 +114,3 @@ gh run list --limit 1
 - PR 标题遵循 Conventional Commits 格式
 - 如果 push 失败（冲突），尝试 rebase 一次，再失败则 BLOCKED
 
-## 强制后继（MANDATORY NEXT STEP）
-
-分支合并完成后：
-1. 调用 autopilot-checkpoint 标记 finish 完成
-2. 必须立即调用 `Skill("autopilot-evolve")`
-
-警告：finish 之后跳过 evolve 是最常见的违规，知识沉淀是强制的。
