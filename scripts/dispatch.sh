@@ -10,6 +10,12 @@
 #
 set -euo pipefail
 
+# Self-locate so sibling scripts (parse-status.sh, task-state.sh) resolve
+# regardless of the caller's CWD — this plugin lives OUTSIDE consumer projects,
+# so relative paths from a business project would not find them.
+# pwd -P (not readlink -f, which is absent on stock macOS) is macOS-safe.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
 # Cleanup trap: forward SIGTERM to child process
 CHILD_PID=""
 cleanup() {

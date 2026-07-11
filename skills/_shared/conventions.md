@@ -35,6 +35,27 @@
 | $HOOKS_DIR | 质量门禁目录 | autopilot/hooks |
 | $ARCHIVE_DIR | 归档目录 | autopilot/archive |
 
+## 分支纪律（两档通用）
+
+**每次变动先开功能分支，禁止在 `main`/`master` 直接实现**（HARD-GATE #2）。
+
+> **作用域**：分支切在**被开发项目的仓库**里（autopilot 运行时 CWD = 业务项目根），与 plugin 仓库无关——**任何引用方每次跑 autopilot 都在自己项目里得到功能分支**。
+
+控制器在 init / 实现前执行：
+
+```bash
+# 当前在主干则切功能分支（主干名自适应见 autopilot-finish，不写死 main/master）
+CUR="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
+case "$CUR" in
+  main|master) git checkout -b "<type>/<feature-name>" ;;  # type ∈ feature|fix|refactor
+  *) : ;;                                                   # 已在功能分支
+esac
+```
+
+- 命名：`feature/<name>`（新功能）、`fix/<name>`（bugfix）、`refactor/<name>`（重构）；`<name>` 与 `$CHANGE_DIR` 同名。
+- 合并策略见 `autopilot-finish`（PR 或 FF 合并回主干）。
+- 例外：仅当用户显式要求“在当前分支直接改”时跳过（需显式声明）。
+
 ## 工作流路由
 
 **控制器全权负责阶段路由**。各 skill 只需完成自身任务并报告状态，不负责调度下一阶段。
@@ -52,6 +73,33 @@ init → explore → analyze → plan → loop → finish → evolve
 - **档位 A**：控制器在调度每个阶段前，已通过 `autopilot-checkpoint` 完成前置验证；各 skill 无需重复验证 progress.md。若 skill 被绕过 checkpoint 直接调用（异常情况），应检查 `$CHANGE_DIR/progress.md` 是否存在，不存在则报错退出。
 - **档位 B**：控制器进入每阶段前自查前置不变量（上一阶段产物是否就绪），无需 progress.md。
 
+## dispatch.sh 路径解析（单一事实源）
+
+`scripts/dispatch.sh` 只随 plugin 安装（如 `~/.qoder/skills/neil-coding-autopilot/scripts/`），**不在被开发的业务项目里**。控制器在业务项目 CWD 下**禁止用相对路径** `scripts/dispatch.sh`（会解析到业务项目、不存在）。任何档位 A 调度前，先按下列顺序解析出绝对路径 `$DISPATCH`，第一个 `test -f` 通过者即用：
+
+1. **`$AGENT_DISPATCH`**（显式覆盖，CI / 非标准安装）：已设且文件存在 → 用它。
+2. **由注入的 skill base 目录推导**（主路径，与安装位置无关）：harness 每次调用 skill 会注入 `Base directory for this skill: <ABS>/skills/<name>`；去掉尾部 `/skills/<name>` 得 plugin 根，拼 `<root>/scripts/dispatch.sh`。
+3. **已知安装位置探测**（兜底）：`$HOME/.qoder/skills/neil-coding-autopilot/scripts/dispatch.sh`。
+4. **都不存在 → fail-closed**：明确报 "Track A 不可用（定位不到 dispatch.sh）：改用档位 B 或设 $AGENT_DISPATCH"，**绝不静默降级成"假装在跑 A"**。
+
+控制器执行的解析函数（把 `SKILL_BASE_DIR` 用 harness 注入的绝对 base 目录替换）：
+
+```bash
+export SKILL_BASE_DIR="<注入的 Base directory for this skill 绝对路径>"
+resolve_dispatch() {
+  [ -n "${AGENT_DISPATCH:-}" ] && [ -f "${AGENT_DISPATCH}" ] && { printf '%s\n' "${AGENT_DISPATCH}"; return 0; }
+  local base="${SKILL_BASE_DIR:-}" root="${SKILL_BASE_DIR:-}"; root="${root%/skills/*}"
+  [ -n "${base}" ] && [ -f "${root}/scripts/dispatch.sh" ] && { printf '%s\n' "${root}/scripts/dispatch.sh"; return 0; }
+  local cand="${HOME}/.qoder/skills/neil-coding-autopilot/scripts/dispatch.sh"
+  [ -f "${cand}" ] && { printf '%s\n' "${cand}"; return 0; }
+  echo "ERROR: Track A dispatch.sh not found — use Track B or set \$AGENT_DISPATCH" >&2; return 1
+}
+DISPATCH="$(resolve_dispatch)" || exit 1
+```
+
+> 跨 OS：Track A 依赖 bash——mac/Linux 开箱可用；**Windows 需 WSL 或 Git Bash**。探不到 bash/qodercli 的环境只能跑档位 B（autopilot-init 会自检并告知）。
+> 全文出现的 `scripts/dispatch.sh` 均代指解析后的 `$DISPATCH` 绝对路径。
+
 ## qodercli Worker 调度模板（档位 A）
 
 > 仅档位 A 使用。档位 B 由控制器在会话内直接实现，不 spawn worker。
@@ -64,8 +112,8 @@ cat > /tmp/autopilot-{stage}-{task}.md << 'EOF'
 [填充后的 prompt 内容]
 EOF
 
-# 2. 调度 worker（推荐经 dispatch.sh；模型默认见下表）
-scripts/dispatch.sh --model "$AUTOPILOT_IMPLEMENTER_MODEL" --cwd "$PROJECT_ROOT" \
+# 2. 调度 worker（先解析 $DISPATCH，见上「dispatch.sh 路径解析」；模型默认见下表）
+"$DISPATCH" --model "$AUTOPILOT_IMPLEMENTER_MODEL" --cwd "$PROJECT_ROOT" \
   --prompt-file /tmp/autopilot-{stage}-{task}.md \
   --instruction "执行该任务并在末尾输出 {STAGE}_STATUS 行" 2>&1 | tail -20
 # 等价裸命令（dispatch.sh 的 qoder 分支内部就是这条，flag 均经 qodercli --help 核实）：
@@ -75,7 +123,7 @@ scripts/dispatch.sh --model "$AUTOPILOT_IMPLEMENTER_MODEL" --cwd "$PROJECT_ROOT"
 # 3. 控制器解析结果中的 Status 行
 ```
 
-> 注（以 `qodercli --help` 为准）：qodercli **支持** `-m/--model`、`-w/--cwd`、`--attachment`、`-o/--output-format`、`--context-window`、`-c/-r/--fork-session`（会话续跑）、`--worktree` 等；**不支持** `--max-turns`。**统一经 `scripts/dispatch.sh` 调度**（已封装 qoder/claude/codex 差异 + 可移植 timeout 兜底），不要手拼裸命令。
+> 注（以 `qodercli --help` 为准）：qodercli **支持** `-m/--model`、`-w/--cwd`、`--attachment`、`-o/--output-format`、`--context-window`、`-c/-r/--fork-session`（会话续跑）、`--worktree` 等；**不支持** `--max-turns`。**统一经解析出的 `$DISPATCH` 调度**（见「dispatch.sh 路径解析」；已封装 qoder/claude/codex 差异 + 可移植 timeout 兜底），不要手拼裸命令、也不要用相对 `scripts/dispatch.sh`（业务项目里不存在）。
 
 **模型配置**（各角色默认值；经 `dispatch.sh --model` 传入，内部映射到 qodercli `-m`）：
 

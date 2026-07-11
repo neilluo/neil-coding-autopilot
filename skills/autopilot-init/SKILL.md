@@ -84,6 +84,26 @@ Check for:
 
 **产出**: 内部工作变量（不落盘），驱动后续步骤的模板选择。
 
+### Step 1b: Track A 能力自检（不 copy，只校验 + 记录）
+
+`scripts/dispatch.sh` 只随 plugin 安装、**不 copy 进业务项目**。init 在此探测本环境能否跑档位 A，把结论记进 AGENTS.md；探不到就明确告知只能用档位 B——绝不静默假装能跑 A。
+
+```bash
+# ① Agent CLI 是否可用（Track A 前提）
+which qodercli >/dev/null 2>&1 && echo "qodercli: OK" || echo "qodercli: MISSING → 只能档位 B"
+# ② 超时二进制（dispatch.sh 需要；macOS 默认无，缺失则 dispatch.sh 自动降级无超时）
+{ command -v timeout || command -v gtimeout; } >/dev/null 2>&1 \
+  && echo "timeout: OK" || echo "timeout: MISSING (macOS: brew install coreutils)"
+# ③ 解析 plugin 自带 dispatch.sh（见 _shared/conventions.md「dispatch.sh 路径解析」）
+DISPATCH="${AGENT_DISPATCH:-$HOME/.qoder/skills/neil-coding-autopilot/scripts/dispatch.sh}"
+[ -f "$DISPATCH" ] && echo "dispatch.sh: $DISPATCH" || echo "dispatch.sh: NOT FOUND → 只能档位 B"
+# ④ token-free 冒烟（stub 三平台，不烧 token；仅在 ①③ 均 OK 时有意义）
+SMOKE="$(dirname "$DISPATCH")/smoke-dispatch.sh"
+[ -f "$SMOKE" ] && bash "$SMOKE" >/dev/null 2>&1 && echo "smoke: PASS" || echo "smoke: SKIP/FAIL"
+```
+
+**产出**: 在 AGENTS.md 记一行 Track A 可用性（可用 / 不可用 + 原因）。不可用不阻断 init——档位 B 始终可用。
+
 ### Step 2: Generate AGENTS.md
 
 **核心约束**（来自 ETH Zurich 研究）:

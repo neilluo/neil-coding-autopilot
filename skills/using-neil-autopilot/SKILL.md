@@ -10,7 +10,7 @@ AI 全托管开发编排器。从需求到部署的全自动开发流水线。
 <HARD-GATE>
 当用户要求开发一个功能或执行 spec 时，必须满足以下**不变量**（无论用哪种执行档位）：
 1. 需求澄清（explore）：动手前确认边界与设计方向，不臆测。
-2. 分支纪律：功能分支开发，不直接在主干写。
+2. 分支纪律：**每次变动先开功能分支**（`<type>/<feature-name>`，type ∈ feature/fix/refactor）；实现前自检当前分支，若在 `main`/`master` 上必须先切分支——**禁止在主干直接改**。
 3. Code Review：改动完成后必须经过 CR（autopilot-review），未审不得进入 finish。
 4. 验证：合并 / 部署前跑通验证命令（编译 / 测试 / 自检）。
 5. 知识沉淀（evolve）：把 CR 发现的规律与踩坑写回知识库。
@@ -53,7 +53,7 @@ AI 全托管开发编排器。从需求到部署的全自动开发流水线。
 > # 或常驻：qodercli --remote-control <id>
 > ```
 >
-> **前置**：`dispatch.sh` 的超时依赖 `timeout`/`gtimeout`（macOS 需 `brew install coreutils`；缺失时自动降级为无超时，见 dispatch.sh）。跑 Track A 前先用 `bash scripts/smoke-dispatch.sh` 冒烟自检（不烧 token）。
+> **前置**：`dispatch.sh` 的路径按 `_shared/conventions.md`「dispatch.sh 路径解析」解析为绝对路径（业务项目里没有相对 `scripts/dispatch.sh`）；其超时依赖 `timeout`/`gtimeout`（macOS 需 `brew install coreutils`；缺失时自动降级为无超时，见 dispatch.sh）。跑 Track A 前先用 `bash scripts/smoke-dispatch.sh` 冒烟自检（不烧 token）。
 
 ## 任务类型分流
 
@@ -101,10 +101,19 @@ autopilot/
 
 ## 初始化流程
 
-执行任何阶段前，先建立变更目录：
+执行任何阶段前，先切功能分支、再建立变更目录：
 
 ```bash
 FEATURE_NAME="<feature-name>"   # 从需求提取的 kebab-case 标识
+TYPE="fix"                      # 任务类型 → feature | fix | refactor（见「任务类型分流」）
+
+# 分支纪律（HARD-GATE #2）：禁止在主干直接改；当前在 main/master 则先切功能分支
+CUR="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
+case "$CUR" in
+  main|master) git checkout -b "${TYPE}/${FEATURE_NAME}" ;;
+  *) echo "已在功能分支 $CUR，继续" ;;
+esac
+
 mkdir -p autopilot/changes/${FEATURE_NAME}
 ```
 
@@ -215,7 +224,7 @@ digraph autopilot {
 5. 任何 skill / worker 报告 **BLOCKED** → 停止流程并通知用户。
 
 ### 档位 A（批处理）
-- 用 `Skill` tool 或 `scripts/dispatch.sh` 逐阶段调度独立进程。
+- 用 `Skill` tool 或解析出的 `$DISPATCH`（按 `_shared/conventions.md`「dispatch.sh 路径解析」得绝对路径，勿用相对 `scripts/dispatch.sh`）逐阶段调度独立进程。
 - 每阶段完成后调用 `Skill("autopilot-checkpoint")` 校验前置并标记 `progress.md`。
 - 阶段间完成状态以 `progress.md` 为唯一事实源。
 - checkpoint 返回 FAIL → 停止流程并通知用户。

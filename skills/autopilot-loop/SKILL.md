@@ -17,6 +17,22 @@ Outer Loop 遍历 Task 列表，Inner Loop 对每个 Task 执行 implement → c
 - `$CHANGE_DIR/tasks.md`（由 autopilot-plan 生成）
 - 验证命令（从 tasks.md 头部读取）
 
+## 前置：分支纪律门（fail-closed）
+
+**开始实现任何 Task 前，先自检当前分支**（HARD-GATE #2 / `_shared/conventions.md`「分支纪律」）。在**被开发项目的仓库**里执行（非 plugin 仓库）：
+
+```bash
+CUR="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
+case "$CUR" in
+  main|master)
+    # init 若未切分支（如 spec-ready 快路径）→ 现在补切，禁止在主干落代码
+    git checkout -b "<type>/<feature-name>" || { echo "BLOCKED: 无法切功能分支"; exit 1; }
+    ;;
+esac
+```
+
+> 这是「实现前自检点」，兜底 init 分支准备被跳过的情况。**引用方在任何项目跑 autopilot，都不会在 main/master 上直接落代码。**
+
 ## Architecture
 
 ```
@@ -131,7 +147,7 @@ digraph loop {
 1. **落盘**（此时档位 B 也必须写）：把已完成 / 剩余 Task 与关键决定写入 `$CHANGE_DIR/tasks.md` + `progress.md`，作为跨会话记忆。
 2. **续跑二选一**：
    - **换新会话续跑（推荐 = compaction）**：开新会话读 tasks.md/progress.md 从下一个 PENDING 继续；或用 qodercli 原生会话续跑 `qodercli -c`（接最近会话）/ `-r <id>`（按 id 恢复）/ `--fork-session`（从摘要派生新会话）。
-   - **切 Track A / 局部 offload（= subagent）**：把剩余重活（大文件实现 / 大 diff 审查）交给 headless worker——经 `scripts/dispatch.sh` 起一次性 `qodercli -p`，只回传摘要，主会话 context 不涨。
+   - **切 Track A / 局部 offload（= subagent）**：把剩余重活（大文件实现 / 大 diff 审查）交给 headless worker——经解析出的 `$DISPATCH`（见 `_shared/conventions.md`「dispatch.sh 路径解析」，勿用相对 `scripts/dispatch.sh`）起一次性 `qodercli -p`，只回传摘要，主会话 context 不涨。
 3. 需显式限窗时，worker 侧可加 `qodercli --context-window <size>`。
 
 > 依据：Anthropic《Context Engineering》——长任务用 compaction（摘要重启）/ memory（外部落盘）/ subagent（独立 context）三策略。本项目 memory 层 = tasks.md/progress.md；compaction/subagent 由 qodercli 原生 `--fork-session`/`-r` 与 dispatch.sh 提供。

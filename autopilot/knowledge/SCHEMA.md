@@ -19,6 +19,8 @@
 - **C5 横切抽象必须全量 rollout**：见 `wiki/guides/cross-cutting-abstraction-rollout.md`。
 - **C6 shell 可移植性**：脚本不假设 GNU 工具存在（timeout/gtimeout、sed -i、date 等）；对外部命令 `command -v` 探测 + 优雅降级。见 `wiki/guides/verify-by-running.md`。
 - **C7 verify-by-running**：关键机制必须有 token-free 冒烟测试（如 `scripts/smoke-dispatch.sh`）；未跑通 = 未验证。
+- **C8 自带脚本可移植定位**：分发型 plugin 的自带脚本用解析出的绝对路径（env → 注入 base → 已知安装位置 → fail-closed），禁止相对 CWD 路径、禁止写死家目录/用户名。见 `wiki/guides/self-contained-script-resolution.md`。
+- **C9 分支纪律**：每次变动先开功能分支（`<type>/<name>`），实现前自检当前分支，禁止在 `main`/`master` 直接改。见 `using-neil-autopilot` HARD-GATE #2 与 `_shared/conventions.md`「分支纪律」。
 
 ## Design Principles
 

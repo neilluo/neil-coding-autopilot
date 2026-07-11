@@ -34,3 +34,16 @@ echo "  ✅ neil-coding-autopilot (root) → ${root_target}"
 echo ""
 echo "Done! Installed $(ls -d "${PLUGIN_DIR}/skills"/*/ | wc -l | tr -d ' ') skills + 1 root entry."
 echo "⚠️  Restart Qoder to activate new skills."
+
+# Track A self-check (non-blocking): prove dispatch.sh actually runs on THIS host
+# now, instead of failing at runtime inside some business project later.
+SMOKE="${PLUGIN_DIR}/scripts/smoke-dispatch.sh"
+if [ -f "$SMOKE" ]; then
+    echo ""
+    if bash "$SMOKE" >/dev/null 2>&1; then
+        echo "  ✅ Track A self-check (smoke-dispatch): PASS"
+    else
+        echo "  ⚠️  Track A self-check (smoke-dispatch): FAILED — batch mode (Track A) may not work here."
+        echo "     Interactive mode (Track B) is unaffected. Run 'bash scripts/smoke-dispatch.sh' to see why."
+    fi
+fi
