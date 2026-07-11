@@ -4,12 +4,17 @@ AI 全托管开发编排器 — 从需求到部署的全自动开发流水线。
 
 ## 简介
 
-Neil Coding Autopilot 是一个 Qoder 插件，通过 qodercli 多进程编排实现全自动化开发流程。当前会话作为控制器，每个阶段通过独立 qodercli 实例执行，各实例可配置不同模型，context 完全隔离。
+Neil Coding Autopilot 是一个 Qoder 插件，支持两种**执行档位**：
+
+- **档位 A · 批处理（Autonomous）**：控制器经 `scripts/dispatch.sh` 为每个阶段 spawn 独立 qodercli 实例，各配不同模型、context 完全隔离。适合无人值守 / CI / 大型多 Task 构建。
+- **档位 B · 交互（Interactive）**：控制器（当前会话）在会话内直接执行各阶段，以 TodoWrite 为单一状态源，不 spawn worker。适合会话内协作 / 中小改动。
+
+**两档执行同一套阶段与不变量**（explore 澄清 / CR / 验证 / evolve 沉淀）：档位只决定「怎么做」，不决定「是否做」。选档规则见 `skills/using-neil-autopilot/SKILL.md` 的「执行档位」。下文架构图描述**档位 A** 的完整多进程编排。
 
 **设计原则**：
 - 各 Skill 只负责自身业务逻辑，报告状态后退出
 - 路由、前置验证、调度约定统一在 `skills/_shared/conventions.md` 和控制器流程图中定义
-- `autopilot-checkpoint` 作为唯一门禁机制，在阶段间强制验证
+- `autopilot-checkpoint` 作为门禁机制，在阶段间强制验证（档位 A 走 skill 门禁，档位 B 走 TodoWrite 等价自查）
 
 ## 架构
 

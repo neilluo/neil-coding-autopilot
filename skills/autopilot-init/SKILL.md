@@ -13,7 +13,7 @@ description: "项目 Harness 初始化与审计。检测项目是否具备 AI �
 <HARD-GATE>
 如果项目根目录无 AGENTS.md 且无 autopilot/ 目录，则本阶段为 MANDATORY。
 已有完整 harness 的项目可跳过（progress.md 中标记 `[x] init (skipped)`）。
-本阶段由 qodercli 独立进程执行（不需要与用户交互）。
+本阶段由独立 qodercli 进程（档位 A）或控制器会话内（档位 B）执行；init 本身不需要与用户交互。
 </HARD-GATE>
 
 ## 模式检测
@@ -145,42 +145,33 @@ Check for:
 
 **Migrate 模式**: 保留现有 AGENTS.md 内容，仅补充 Doc Navigation 指向 `autopilot/`。
 
-### Step 3: Create autopilot/ Directory Structure
+### Step 3: 按需生长 autopilot/ 目录（不预建空目录）
+
+**原则：grow-on-demand。只创建"这一步真正要写文件"的目录，绝不 `mkdir` 一堆空目录 / 空状态机文件占位。** 空壳目录违反"不留无用文件"，是噪声。
 
 ```bash
-mkdir -p autopilot/changes
-mkdir -p autopilot/archive
-mkdir -p autopilot/knowledge/raw
-mkdir -p autopilot/knowledge/wiki/{entities,concepts,guides,comparisons}
-mkdir -p autopilot/knowledge/references
-mkdir -p autopilot/hooks
+# 只建当前确实要落文件的目录。例如本次要写 SCHEMA + 一个 guide：
+mkdir -p autopilot/knowledge/wiki/guides
+# raw / entities / concepts / comparisons / references / hooks 等——等真有内容再建。
 ```
 
-**完整目录树**:
+**完整形态（仅作参考，按需生长，不一次性铺开空目录）**:
 
 ```
 autopilot/
-├── changes/                      # 活跃开发变更（per-run）
-├── archive/                      # 已完成的历史变更
-├── knowledge/                    # Karpathy LLM Wiki 三层知识库
+├── changes/                      # 活跃开发变更（有变更时才建）
+├── archive/                      # 归档（有归档时才建）
+├── knowledge/
 │   ├── SCHEMA.md                 # 维护规则 + 项目元数据（≤200行）
-│   ├── raw/                      # Layer 1: 不可变源（CR发现/踩坑/代码快照）
-│   │   └── {YYYYMMDD-slug}.md
+│   ├── raw/                      # Layer 1: 不可变源（有来源时才建）
 │   ├── wiki/                     # Layer 2: LLM 编译产物
-│   │   ├── index.md              # 全局导航（always-on，每次会话必读）
-│   │   ├── inbox.md              # 来源状态机（pending/processing/done）
-│   │   ├── log.md                # 操作时间线（append-only）
-│   │   ├── entities/             # 实体页（模块概览/组件职责）
-│   │   ├── concepts/             # 概念页（设计原则/架构决策）
-│   │   ├── guides/               # 指南页（编码规则/操作指南）
-│   │   └── comparisons/          # 对比页（方案 A vs B）
-│   └── references/               # 静态框架性内容
-├── hooks/                        # 质量门禁（Feedback/Sensor Layer）
-│   ├── post-edit.sh              # 变更后自动检查
-│   ├── build-gate.sh             # 编译验证
-│   └── pre-completion.md         # 完成前自检清单
-└── (docs/ 已合并入 knowledge/wiki/entities/)
+│   │   ├── index.md              # 全局导航（有页面时才建）
+│   │   └── entities/ concepts/ guides/ comparisons/   # 有对应页面时才建
+│   └── references/               # 静态框架性内容（有内容时才建）
+└── hooks/                        # 质量门禁（有 hook 时才建）
 ```
+
+> `inbox.md` / `log.md` 等状态机文件**不预建空文件**——首次真正有来源 / 操作时（autopilot-evolve）再创建。
 
 ### Step 4: Generate SCHEMA.md
 
@@ -353,49 +344,24 @@ evidence: derived
 
 **6c. wiki/concepts/ — 架构决策类（可选，仅当代码中发现显著设计决策时生成）**
 
-### Step 7: Generate wiki/index.md + inbox.md + log.md
+### Step 7: Generate wiki/index.md（仅当已生成 wiki 页）
 
-**wiki/index.md**（全局导航，always-on，Agent 每次会话必读）：
+**只在 Step 6 实际生成了 wiki 页时**才写 `wiki/index.md`（导航）；没有页面就不建空导航。
 
 ```markdown
 # Knowledge Wiki Index
 
-> Auto-maintained by autopilot-evolve. Agent 每次会话读取本文件定位知识。
+> Agent 每次会话读取本文件定位知识。
+
+## Guides（编码规则/指南）
+- [[general-rules]] — 通用编码规则
 
 ## Entities（模块/组件）
 
-- [[module-name]] — 一句话描述
-
 ## Concepts（架构决策）
-
-## Guides（编码规则/指南）
-
-- [[backend-rules]] — Java/Spring 编码规则
-
-## Comparisons（对比分析）
 ```
 
-**wiki/inbox.md**（来源状态机）：
-
-```markdown
-# Inbox — 待处理队列
-
-## Pending
-
-## Processing
-
-## Done
-```
-
-**wiki/log.md**（操作时间线）：
-
-```markdown
-# 操作日志
-
-| 日期 | 操作 | 详情 |
-|------|------|------|
-| YYYY-MM-DD | Init | 项目类型: X / 规模: Y / 生成 N 页 |
-```
+> `inbox.md` / `log.md` 等状态机文件**不在 init 阶段预建空文件**——由 `autopilot-evolve` 首次真正 ingest 时按需创建。空状态机文件是噪声。
 
 ### Step 8: Score & Validate (Audit Checklist)
 

@@ -94,14 +94,14 @@ cat AGENTS.md 2>/dev/null || echo "No AGENTS.md"
 - Spec 必须规避 wiki/guides/ 和 wiki/concepts/ 中记录的「已知坑点」
 - Spec 必须与 explore-notes.md 中确认的设计方向一致
 
-**Spec 必须包含**:
+**Spec 必须包含**（按项目形态取用，不假设某语言/框架）:
 1. 项目概述 + 用户故事
 2. 系统架构（文字 + ASCII 图）
-3. 数据库设计（完整 DDL）
-4. API 设计（RESTful 接口表）
-5. 核心代码接口（Java interface / 关键类）
+3. 数据模型 / 持久化设计（如涉及；关系型 DB 给出 DDL）
+4. 接口设计（API / CLI / 库接口，视项目形态而定）
+5. 核心接口 / 类型定义（用项目自身语言表达）
 6. 部署方案
-7. 里程碑/Phase 规划
+7. 里程碑 / Phase 规划
 
 ### Step 4: 自检循环（2-3轮）
 
@@ -124,7 +124,6 @@ cat AGENTS.md 2>/dev/null || echo "No AGENTS.md"
 ## 约束
 
 - Spec 不超过 800 行（聚焦 MVP）
-- 每张数据库表必须有 `ext_info JSON` 扩展字段
-- ext_info 内必须包含 traceId
+- Spec 的技术约束（表结构 / 字段 / 日志追踪等规范）**来自被开发项目自身**（`AGENTS.md` / `SCHEMA.md` / `wiki/guides`），不在此硬编码某语言 / 框架的规则
 - 不做多用户设计（除非需求明确要求）
 

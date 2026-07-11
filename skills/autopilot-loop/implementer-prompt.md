@@ -9,7 +9,7 @@
 
 ## 项目信息
 - 工作目录：{WORKING_DIR}
-- 项目类型：{PROJECT_TYPE} (Java/Spring Boot / Node.js / etc.)
+- 项目类型：{PROJECT_TYPE} (例：Java/Spring Boot、Node.js、Python、Go 等)
 - 验证命令：{VERIFY_CMD}
 
 ## 你的任务
@@ -20,17 +20,19 @@
 
 1. 读取任务描述中提到的相关文件（如果是修改而非新建）
 2. 实现代码
-3. 运行验证命令确认编译通过
-4. 如果编译失败，自行修复
+3. 运行验证命令确认编译/测试通过
+4. 如果失败，自行修复
 5. 自检代码质量
 
 ## 代码规范
 
-- 遵循项目已有的代码风格
-- 每张数据库表必须有 ext_info JSON 字段
-- Service 层创建/更新记录时，ext_info 必须写入 traceId
-- 使用 InputStream 流式处理大文件，单 chunk 不超 10MB
-- 异常不能吞掉，至少 log.error
+- **遵循被开发项目自身的规范**（不要套用与本项目无关的框架约定）。动手前先读（存在才读）：
+  - `AGENTS.md`（关键约束 / 编码规则）
+  - `autopilot/knowledge/SCHEMA.md`（Constraints / Design Principles）
+  - `autopilot/knowledge/wiki/guides/*`（编码规则页）
+- 遵循项目已有的代码风格与目录结构
+- 错误 / 异常不能静默吞掉，至少记录日志
+- 外部调用要有超时与失败兜底
 - 不要引入 Task 描述外的额外功能
 
 ## 遇到困难时

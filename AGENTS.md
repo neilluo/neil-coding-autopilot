@@ -4,7 +4,11 @@ AI 全托管开发编排器。从需求到部署的全自动开发流水线。
 
 ## 架构概览
 
-**执行模型**: qodercli 多进程编排。当前会话为控制器，每个阶段/工人通过独立 qodercli 实例执行，各实例可配置不同模型，context 完全隔离。
+**执行模型（双档）**:
+- **档位 A · 批处理**：qodercli 多进程编排——控制器经 `scripts/dispatch.sh` 为每阶段/工人 spawn 独立实例，各配模型、context 隔离。用于无人值守 / CI / 大型构建。
+- **档位 B · 交互**：控制器（当前会话）会话内直接执行，TodoWrite 为单一状态源，不 spawn worker。用于会话内协作 / 中小改动。
+
+两档共享同一套阶段与不变量（explore / CR / verify / evolve）。下方拓扑描述**档位 A**；选档规则见 `skills/using-neil-autopilot/SKILL.md` 的「执行档位」。
 
 **顶层串行流程**:
 
