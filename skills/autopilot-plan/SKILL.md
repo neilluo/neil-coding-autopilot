@@ -47,7 +47,9 @@ cat $CHANGE_DIR/spec.md   # 完整读取，不截断
 3. 依赖的前置 Task（如有）
 4. 验证方式（编译通过 / 测试通过 / curl 验证）
 
-### Step 4: 写入 tasks.md
+### Step 4: 写入 tasks.md（档位 A）/ TodoWrite（档位 B）
+
+> 按 `_shared/conventions.md` 档位适配表：档位 A 把 Task 落盘为 `tasks.md`（worker 跨进程读取）；档位 B 可不写 tasks.md，直接用 TodoWrite 列 Task（拆解逻辑与格式要求相同）。
 
 **文件位置**: `$CHANGE_DIR/tasks.md`
 

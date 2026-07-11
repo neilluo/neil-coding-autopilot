@@ -10,6 +10,22 @@
 
 以下约定除特别标注"（档位 A）"外，两档通用。
 
+## 档位适配表
+
+各执行层 skill **只描述一套步骤**；下表是唯一的档位差异映射（动作 → 档位 A 机制 / 档位 B 机制）。skill 内不再复制两套逻辑，遇到档位相关动作时**按本表执行**。
+
+| 流程动作 | 档位 A（批处理） | 档位 B（交互） |
+|---------|-----------------|---------------|
+| 执行一个 Task | spawn 独立 qodercli worker（context 隔离） | 控制器在当前会话内直接实现 |
+| Task 列表来源 | `$CHANGE_DIR/tasks.md`（落盘） | TodoWrite（可不写 tasks.md） |
+| Task 状态记录 | 更新 tasks.md 的 `Status:` | 更新 TodoWrite 状态 |
+| 阶段完成标记 | `autopilot-checkpoint` 写 `progress.md` | 自查前置不变量 + TodoWrite 标 COMPLETE |
+| CR 调度 | spawn reviewer worker | 控制器直接审（OCR 或内联审查） |
+| 修复 | spawn fixer worker | 控制器直接改 |
+| 恢复 / 断点续跑 | 读 `progress.md` | 读 TodoWrite 状态 |
+
+> 状态源之所以分档：档位 A 的 worker 每次 fresh context、需外部记忆（tasks.md/progress.md）跨进程存活；档位 B 单一连续 context，TodoWrite 即足。**两档的阶段顺序与不变量完全一致**（explore/CR/verify/evolve），差异只在上表机制列。
+
 ## 路径约定
 
 | 变量 | 含义 | 示例 |
@@ -82,3 +98,24 @@ qodercli -p "$(cat /tmp/autopilot-{stage}-{task}.md)" \
 - `DONE` → （档位 A）调 checkpoint + 下一阶段；（档位 B）TodoWrite 标记完成 + 下一阶段
 - `BLOCKED` → 停止流程，通知用户
 - `SKIPPED` → 标记 skipped + 下一阶段
+
+## REVIEW_STATUS 约定（三态，fail-closed）
+
+`autopilot-review` 的产出统一为三态，`autopilot-loop` 与 `autopilot-finish` 都必须消费：
+
+| 状态 | 含义 | 下游行为 |
+|------|------|---------|
+| `PASS` | 全部目标文件已审，无 Critical/Major | 允许 commit / 进入 finish |
+| `FAIL` | 有 Critical/Major 问题 | loop 调 fixer（≤3 轮）；仍未过 → BLOCKED |
+| `INCOMPLETE` | 有文件未被审查（超时/跳过），重试一次仍未消解 | **fail-closed**：不得 commit、不得进入 finish；上报控制器（人工审 / 缩小 diff / 显式豁免） |
+
+> 核心原则：**未经审查的变更不能静默通过**（fail-closed）。绝不「未审=通过」，也不在 CR 未过时 force-commit。
+
+## base 分支自适应
+
+凡涉及「相对主干」或「合并回主干」的操作，不写死 `main`/`master`，用以下探测（供 `autopilot-review`、`autopilot-finish` 复用）：
+
+```bash
+BASE=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')
+[ -z "$BASE" ] && BASE=$(git rev-parse --verify --quiet main >/dev/null && echo main || echo master)
+```

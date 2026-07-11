@@ -11,6 +11,19 @@ description: "分支完成与合并。所有Task完成后，创建PR或直接合
 
 ## Process
 
+> 先按 `_shared/conventions.md` 档位适配表确定状态源（档位 A 读 tasks.md，档位 B 读 TodoWrite），并用其中的 **base 分支自适应** 探测 `$BASE`（不写死 main/master）。
+
+### Step 0: CR 完整性门（fail-closed）
+
+合并前必须确认所有变更都已通过 CR。任一 Task 的 `REVIEW_STATUS ∈ {FAIL, INCOMPLETE}`，或 review 报告有未审文件（见 `autopilot-review` 的 INCOMPLETE）→ `FINISH_STATUS=BLOCKED`，**拒绝合并**。
+
+```bash
+# 档位 A：从 tasks.md 检查；档位 B：从 TodoWrite / 本轮 review 结果检查
+grep -nE "REVIEW_STATUS: *(FAIL|INCOMPLETE)" $CHANGE_DIR/tasks.md 2>/dev/null && echo "BLOCKED: 存在未过审 / 未审完的 Task"
+```
+
+> 原则：**未经审查的变更不得进入 finish**（fail-closed）。这是 `REVIEW_STATUS=INCOMPLETE` 的落地消费点。
+
 ### Step 1: 验证所有 Task 完成
 
 ```bash
@@ -51,19 +64,24 @@ git push origin HEAD
 **选项 A（推荐）**: 创建 PR
 
 ```bash
+# BASE 见 _shared/conventions.md「base 分支自适应」
+BASE=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')
+[ -z "$BASE" ] && BASE=$(git rev-parse --verify --quiet main >/dev/null && echo main || echo master)
+
 gh pr create \
   --title "feat: [feature description]" \
   --body "## Summary\n\nAutopilot implementation of [spec].\n\n## Tasks Completed\n\n[从tasks.md提取完成列表]" \
-  --base main
+  --base "$BASE"
 ```
 
 **选项 B**: 直接合并（如果用户配置了 auto_merge=true）
 
 ```bash
-git checkout main
-git merge --squash autopilot/feature-name
+FEATURE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+git checkout "$BASE"
+git merge --squash "$FEATURE_BRANCH"
 git commit -m "feat: [feature description]"
-git push origin main
+git push origin "$BASE"
 ```
 
 ### Step 5: 确认 CI/CD 触发

@@ -13,7 +13,7 @@ Neil Coding Autopilot 是一个 Qoder 插件，支持两种**执行档位**：
 
 **设计原则**：
 - 各 Skill 只负责自身业务逻辑，报告状态后退出
-- 路由、前置验证、调度约定统一在 `skills/_shared/conventions.md` 和控制器流程图中定义
+- 路由、前置验证、调度约定、**档位适配表**（执行层档位差异的单一事实源）统一在 `skills/_shared/conventions.md` 和控制器流程图中定义
 - `autopilot-checkpoint` 作为门禁机制，在阶段间强制验证（档位 A 走 skill 门禁，档位 B 走 TodoWrite 等价自查）
 
 ## 架构

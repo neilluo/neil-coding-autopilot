@@ -12,6 +12,8 @@ Outer Loop 遍历 Task 列表，Inner Loop 对每个 Task 执行 implement → c
 
 ## 输入
 
+> 执行前先按 `_shared/conventions.md` **档位适配表**确定档位；下列为档位 A 形态，档位 B 的 Task 列表来自 TodoWrite、验证命令由控制器确定。
+
 - `$CHANGE_DIR/tasks.md`（由 autopilot-plan 生成）
 - 验证命令（从 tasks.md 头部读取）
 
@@ -32,6 +34,8 @@ Inner Loop (qodercli worker，独立进程):
   ├─ 自检
   └─ 报告状态后退出
 ```
+
+> 上面 Architecture 与下面 digraph 描述**档位 A**（spawn worker）。**档位 B** 走同一套 Outer/Inner 循环与判定，但控制器在会话内直接实现、以 TodoWrite 记录 Task 状态——逐项映射见 `_shared/conventions.md` 档位适配表。
 
 ## 模型配置
 
@@ -59,7 +63,7 @@ digraph loop {
     "Spawn qodercli fixer with error" [shape=box];
     "Fix attempts < 3?" [shape=diamond];
     "Spawn qodercli reviewer" [shape=box];
-    "Review passes?" [shape=diamond];
+    "REVIEW_STATUS = ?" [shape=diamond];
     "Spawn qodercli fixer with CR feedback" [shape=box];
     "CR fix attempts < 3?" [shape=diamond];
     "git commit + update task: COMPLETE" [shape=box];
@@ -79,12 +83,13 @@ digraph loop {
     "Spawn qodercli fixer with error" -> "Fix attempts < 3?";
     "Fix attempts < 3?" -> "Spawn qodercli implementer" [label="yes, retry"];
     "Fix attempts < 3?" -> "LOOP_STATUS=BLOCKED" [label="no"];
-    "Spawn qodercli reviewer" -> "Review passes?";
-    "Review passes?" -> "git commit + update task: COMPLETE" [label="yes"];
-    "Review passes?" -> "Spawn qodercli fixer with CR feedback" [label="no"];
+    "Spawn qodercli reviewer" -> "REVIEW_STATUS = ?";
+    "REVIEW_STATUS = ?" -> "git commit + update task: COMPLETE" [label="PASS"];
+    "REVIEW_STATUS = ?" -> "Spawn qodercli fixer with CR feedback" [label="FAIL"];
+    "REVIEW_STATUS = ?" -> "LOOP_STATUS=BLOCKED" [label="INCOMPLETE (fail-closed)"];
     "Spawn qodercli fixer with CR feedback" -> "CR fix attempts < 3?";
     "CR fix attempts < 3?" -> "Run verify command" [label="yes, re-verify"];
-    "CR fix attempts < 3?" -> "git commit + update task: COMPLETE" [label="no, force complete"];
+    "CR fix attempts < 3?" -> "LOOP_STATUS=BLOCKED" [label="no (CR unresolved, fail-closed)"];
     "git commit + update task: COMPLETE" -> "More PENDING tasks?";
     "More PENDING tasks?" -> "Read tasks.md, find next PENDING task" [label="yes"];
     "More PENDING tasks?" -> "LOOP_STATUS=DONE" [label="no"];
@@ -93,11 +98,28 @@ digraph loop {
 
 ## 控制器行为规则
 
-1. **不亲自写代码** — 所有实现通过 qodercli worker 完成
+> 先按 `_shared/conventions.md` **档位适配表**确定"怎么做"；下列规则（不变量）两档都适用。
+
+1. **执行机制随档位** — 档位 A：所有实现经 qodercli worker；档位 B：控制器在会话内直接实现（见适配表），不 spawn worker
 2. **验证是强制的** — 每个 Task 完成后必须跑验证命令
-3. **CR 是强制的** — 编译通过后必须调度 reviewer
-4. **状态落盘** — 每个 Task 完成/失败后更新 tasks.md
-5. **失败快速** — 连续 3 次失败即 BLOCKED，不无限重试
+3. **CR 是强制的** — 验证通过后必须审查，结果按 `REVIEW_STATUS`（三态，见 conventions）处理
+4. **CR 结果 fail-closed** — `PASS`→commit；`FAIL`→fixer（≤3 轮，仍未过 → BLOCKED）；`INCOMPLETE`→**不 commit、不推进、BLOCKED 上报**。绝不 force-commit 未过审代码
+5. **状态记录随档位** — 档位 A 更新 tasks.md，档位 B 更新 TodoWrite
+6. **失败快速** — 连续 3 次失败即 BLOCKED，不无限重试
+
+## 档位 B（交互）执行
+
+控制器在会话内直接执行同一套循环（Ralph 五步）：**Pick → Implement → Validate → Commit → Next**。
+- **Pick**：从 TodoWrite 取下一个 PENDING Task
+- **Implement**：控制器直接改代码（不 spawn worker）
+- **Validate**：跑 $VERIFY_CMD（+ 测试 / 运行时，按需）
+- **Commit**：验证 + CR 通过后提交；CR 非 PASS 按 fail-closed 处理（见规则 4）
+- **Next**：TodoWrite 标 COMPLETE，进入下一 Task
+
+安全阀（两档通用，防打转）：
+- `MAX_ITERATIONS`（默认 8）：单 Task 迭代上限
+- **重试前反思**：修复前先自问「上次为什么失败？这次具体改什么？是否在重复同一无效做法？」
+- 卡 3 轮同一错误 → 停手上报（档位 A：kill + reassign 新 worker；档位 B：BLOCKED 通知用户）
 
 ## qodercli Worker 调度
 

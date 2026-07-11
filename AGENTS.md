@@ -8,7 +8,7 @@ AI 全托管开发编排器。从需求到部署的全自动开发流水线。
 - **档位 A · 批处理**：qodercli 多进程编排——控制器经 `scripts/dispatch.sh` 为每阶段/工人 spawn 独立实例，各配模型、context 隔离。用于无人值守 / CI / 大型构建。
 - **档位 B · 交互**：控制器（当前会话）会话内直接执行，TodoWrite 为单一状态源，不 spawn worker。用于会话内协作 / 中小改动。
 
-两档共享同一套阶段与不变量（explore / CR / verify / evolve）。下方拓扑描述**档位 A**；选档规则见 `skills/using-neil-autopilot/SKILL.md` 的「执行档位」。
+两档共享同一套阶段与不变量（explore / CR / verify / evolve）。下方拓扑描述**档位 A**；选档规则见 `skills/using-neil-autopilot/SKILL.md` 的「执行档位」。执行层各 skill（loop/plan/finish/evolve/analyze）已 track-aware，档位差异集中在 `skills/_shared/conventions.md` 的「档位适配表」（单一事实源，不在各 skill 复制两套逻辑）。
 
 **顶层串行流程**:
 

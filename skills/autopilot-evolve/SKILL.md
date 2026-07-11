@@ -9,6 +9,8 @@ description: "AGENTS.md自进化与知识沉淀。每次autopilot执行结束后
 
 **宣告**: "正在使用 autopilot-evolve 沉淀知识和进化 AGENTS.md。"
 
+> 档位无关：**两档（A 批处理 / B 交互）都必须执行 evolve**（知识沉淀是不变量）。evolve 只读写知识库文件，机制与档位无关。
+
 ## 路径约定
 
 知识库目录路径统一为 `$KNOWLEDGE_DIR`（即 `autopilot/knowledge/`）。
@@ -71,7 +73,7 @@ evidence: primary
 [可复用的教训]
 ```
 
-同时更新 `$KNOWLEDGE_DIR/wiki/inbox.md` 状态为 pending。
+同时更新 `$KNOWLEDGE_DIR/wiki/inbox.md` 状态为 pending（**若不存在则创建**——init 采用 grow-on-demand 不预建空状态机文件，evolve 首次 ingest 时按需创建 inbox.md/log.md）。
 
 ### Step 3: Ingest（raw → wiki 编译）
 
@@ -105,7 +107,7 @@ evidence: primary
 
 ### Step 4: 更新操作日志
 
-更新 `$KNOWLEDGE_DIR/wiki/log.md`：
+更新 `$KNOWLEDGE_DIR/wiki/log.md`（不存在则创建）：
 
 ```markdown
 | YYYY-MM-DD | Evolve | 新增 N 条 raw，更新 M 页 wiki，新建 K 页 |

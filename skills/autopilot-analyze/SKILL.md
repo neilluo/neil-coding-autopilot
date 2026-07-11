@@ -113,7 +113,7 @@ cat AGENTS.md 2>/dev/null || echo "No AGENTS.md"
 | 第2轮 | 用户体验、部署运维、成本 |
 | 第3轮 | 边界情况、扩展性、MVP聚焦度 |
 
-**自检方式**: 控制器按 `_shared/conventions.md` 中的调度模板生成自检 prompt，调度独立审查实例执行。
+**自检方式**: 档位 A——控制器按 `_shared/conventions.md` 调度模板生成自检 prompt、调度独立审查实例；档位 B——控制器在会话内直接自检（同样 2-3 轮维度）。
 
 ## 输出
 
