@@ -9,3 +9,4 @@
 | 2026-07-11 | Evolve | dispatch.sh 相对路径→绝对路径解析（跨项目 Track A 修复）；conventions 单一事实源 + init Step1b 自检 + install smoke；新建 self-contained-script-resolution guide + C8；V2/V4 从外部 cwd 真跑 PASS |
 | 2026-07-11 | Evolve | 分支纪律从原则升级为强制：HARD-GATE #2 + init 分支准备片段 + conventions「分支纪律」SSOT + C9；raw 记录本轮 master 直改教训 |
 | 2026-07-11 | Evolve | 分支纪律补强：loop 加前置分支纪律门(fail-closed 自检) + conventions 标注作用域=被开发项目仓库；明确对引用方生效，非仅约束 plugin 自身开发 |
+| 2026-07-12 | Feat+E2E | 新增 run-track-a.sh（确定性 bash Track A 编排器，Ralph 范式）+ smoke-run-track-a.sh(3场景) + 修 task-state.sh flock(macOS 降级)；文档入口改指启动器；真实 E2E 从 monitor 跑通 qodercli inner loop(commit 1d41fb0)；subagent CR 修 commit-fail fail-open |

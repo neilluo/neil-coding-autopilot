@@ -45,15 +45,18 @@ AI 全托管开发编排器。从需求到部署的全自动开发流水线。
 
 > 设计自省：档位 A 的多进程编排依赖 `scripts/dispatch.sh` 作为确定性驱动；当它由交互 agent 读 SKILL 手动驱动时，实际落到档位 B。**不要假装在跑 A 却只做了 B**——显式声明当前档位，并对该档位诚实履约。
 >
-> **交互调用 `/using-neil-autopilot` ⇒ 档位 B ⇒ 无 qodercli 级 context 隔离**（编排器 context 会随任务增长）。要真正跑 **Track A（多进程隔离 + 分角色模型）**，必须由顶层 **headless** agent 驱动：
+> **交互调用 `/using-neil-autopilot` ⇒ 档位 B ⇒ 无 qodercli 级 context 隔离**（编排器 context 会随任务增长）。要真正跑 **Track A（多进程隔离 + 分角色模型）**，用**确定性 bash 编排器** `scripts/run-track-a.sh` 从终端启动——它本身零 context、逐 Task 经 dispatch.sh spawn fresh worker，跑 implement→verify→review→fix→commit（fail-closed；退出码 0=全 DONE / 2=BLOCKED）：
 >
 > ```bash
-> # 顶层 headless 编排器（它再循环调 scripts/dispatch.sh 逐 Task spawn worker）
-> qodercli -p "以档位 A 跑 autopilot：按 tasks.md 逐个 spawn worker" -w "$PROJECT_ROOT"
-> # 或常驻：qodercli --remote-control <id>
+> # 从业务项目根启动；编排器=脚本(确定性/可续跑)，worker=每步 fresh qodercli
+> bash "$PLUGIN_DIR/scripts/run-track-a.sh" \
+>   --change-dir autopilot/changes/<feature> --cwd "$PROJECT_ROOT"
+> # --dry-run 先看计划(不烧 token)；--resume 断点续跑；--max-rounds N 控 CR 轮数
 > ```
 >
-> **前置**：`dispatch.sh` 的路径按 `_shared/conventions.md`「dispatch.sh 路径解析」解析为绝对路径（业务项目里没有相对 `scripts/dispatch.sh`）；其超时依赖 `timeout`/`gtimeout`（macOS 需 `brew install coreutils`；缺失时自动降级为无超时，见 dispatch.sh）。跑 Track A 前先用 `bash scripts/smoke-dispatch.sh` 冒烟自检（不烧 token）。
+> 别用"起一个 qodercli 当编排器、让它自己读 SKILL 循环"——那把 context-rot 搬到编排器身上、非确定、难调试（调研结论见 `autopilot/knowledge/wiki/guides/`）。
+>
+> **前置**：`run-track-a.sh` 依赖同目录 dispatch.sh / parse-status.sh / task-state.sh；超时依赖 `timeout`/`gtimeout`（macOS 需 `brew install coreutils`，缺失自动降级）。跑前先 `bash scripts/smoke-dispatch.sh` + `bash scripts/smoke-run-track-a.sh` 冒烟自检（不烧 token）。
 
 ## 任务类型分流
 

@@ -6,6 +6,7 @@
 - [[cross-cutting-abstraction-rollout]] — 横切抽象的全量 rollout 与闭环验证
 - [[verify-by-running]] — verify-by-running + shell 可移植性
 - [[self-contained-script-resolution]] — 分发型 plugin 自带脚本的可移植定位
+- [[track-a-launcher-pattern]] — 自主批处理用确定性脚本编排器（非 LLM 编排）
 
 ## Concepts（架构决策）
 

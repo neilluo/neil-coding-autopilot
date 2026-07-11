@@ -100,6 +100,10 @@ DISPATCH="$(resolve_dispatch)" || exit 1
 > 跨 OS：Track A 依赖 bash——mac/Linux 开箱可用；**Windows 需 WSL 或 Git Bash**。探不到 bash/qodercli 的环境只能跑档位 B（autopilot-init 会自检并告知）。
 > 全文出现的 `scripts/dispatch.sh` 均代指解析后的 `$DISPATCH` 绝对路径。
 
+## Track A 一键启动器（run-track-a.sh）
+
+`scripts/run-track-a.sh` 是基于以上原语（dispatch.sh + parse-status.sh + task-state.sh）的**确定性 bash 编排器**：从终端启动，读 `tasks.md`，逐 Task 跑 implement→verify→review→fix→commit（fail-closed，退出码 0=全 DONE / 1=用法错 / 2=BLOCKED / 130=中断）。**它是档位 A 的正确入口**——编排器是脚本（零 context、可续跑、可 dry-run），worker 是每步 fresh qodercli。不要"起一个 qodercli 当编排器让它自己循环"（把 context-rot 搬到编排器、非确定、难调试；调研依据见 `autopilot/knowledge/wiki/guides/track-a-launcher-pattern.md`）。用法/前置见 `using-neil-autopilot`「执行档位」。
+
 ## qodercli Worker 调度模板（档位 A）
 
 > 仅档位 A 使用。档位 B 由控制器在会话内直接实现，不 spawn worker。
