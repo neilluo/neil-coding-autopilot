@@ -64,17 +64,20 @@ cat > /tmp/autopilot-{stage}-{task}.md << 'EOF'
 [填充后的 prompt 内容]
 EOF
 
-# 2. 调度 worker（模型通过环境变量配置，见 AGENTS.md）
-qodercli -p "$(cat /tmp/autopilot-{stage}-{task}.md)" \
-  --permission-mode bypass_permissions \
-  --output-format text 2>&1 | tail -20
+# 2. 调度 worker（推荐经 dispatch.sh；模型默认见下表）
+scripts/dispatch.sh --model "$AUTOPILOT_IMPLEMENTER_MODEL" --cwd "$PROJECT_ROOT" \
+  --prompt-file /tmp/autopilot-{stage}-{task}.md \
+  --instruction "执行该任务并在末尾输出 {STAGE}_STATUS 行" 2>&1 | tail -20
+# 等价裸命令（dispatch.sh 的 qoder 分支内部就是这条，flag 均经 qodercli --help 核实）：
+#   qodercli -m "$MODEL" -w "$CWD" --permission-mode bypass_permissions \
+#     --attachment "$PROMPT_FILE" -p "$INSTRUCTION" -o text
 
 # 3. 控制器解析结果中的 Status 行
 ```
 
-> 注：当前 qodercli 不支持 `--max-turns` / `--model` 等参数；worker 靠任务自然收敛，模型经环境变量选择。如需时长兜底，由控制器侧用 `timeout` 等外部命令包裹，**不要给 qodercli 传它不认识的 flag**（会直接报错）。
+> 注（以 `qodercli --help` 为准）：qodercli **支持** `-m/--model`、`-w/--cwd`、`--attachment`、`-o/--output-format`、`--context-window`、`-c/-r/--fork-session`（会话续跑）、`--worktree` 等；**不支持** `--max-turns`。**统一经 `scripts/dispatch.sh` 调度**（已封装 qoder/claude/codex 差异 + 可移植 timeout 兜底），不要手拼裸命令。
 
-**模型配置**（通过环境变量，当前 qodercli 不支持 `--model` 参数）：
+**模型配置**（各角色默认值；经 `dispatch.sh --model` 传入，内部映射到 qodercli `-m`）：
 
 | 环境变量 | 角色 | 默认值 |
 |---------|------|--------|

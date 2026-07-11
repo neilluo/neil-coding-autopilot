@@ -121,6 +121,21 @@ digraph loop {
 - **重试前反思**：修复前先自问「上次为什么失败？这次具体改什么？是否在重复同一无效做法？」
 - 卡 3 轮同一错误 → 停手上报（档位 A：kill + reassign 新 worker；档位 B：BLOCKED 通知用户）
 
+## 档位 B context 预算兜底
+
+档位 B 全程单一连续 context，长任务会 context 膨胀（context rot：token 越多、召回越差）。控制器须自我监测并兜底：
+
+**触发启发式**（任一满足）：已完成 Task ≥ 6、单轮迭代明显偏长、或明显感到“上下文变重 / 开始丢失早期决定”。
+
+**兜底动作**：
+1. **落盘**（此时档位 B 也必须写）：把已完成 / 剩余 Task 与关键决定写入 `$CHANGE_DIR/tasks.md` + `progress.md`，作为跨会话记忆。
+2. **续跑二选一**：
+   - **换新会话续跑（推荐 = compaction）**：开新会话读 tasks.md/progress.md 从下一个 PENDING 继续；或用 qodercli 原生会话续跑 `qodercli -c`（接最近会话）/ `-r <id>`（按 id 恢复）/ `--fork-session`（从摘要派生新会话）。
+   - **切 Track A / 局部 offload（= subagent）**：把剩余重活（大文件实现 / 大 diff 审查）交给 headless worker——经 `scripts/dispatch.sh` 起一次性 `qodercli -p`，只回传摘要，主会话 context 不涨。
+3. 需显式限窗时，worker 侧可加 `qodercli --context-window <size>`。
+
+> 依据：Anthropic《Context Engineering》——长任务用 compaction（摘要重启）/ memory（外部落盘）/ subagent（独立 context）三策略。本项目 memory 层 = tasks.md/progress.md；compaction/subagent 由 qodercli 原生 `--fork-session`/`-r` 与 dispatch.sh 提供。
+
 ## qodercli Worker 调度
 
 所有 worker 均按 `_shared/conventions.md` 中的调度模板执行，差异仅在 prompt 文件内容：
@@ -202,4 +217,6 @@ L3 Runtime Verification 流程：
 3. 执行 `$RUNTIME_VERIFY_CMD`（如 curl 测 API）
 4. `$RUNTIME_STOP_CMD` 停止服务
 5. 退出码非零 → FAIL
+
+> 验证层级是**项目形状相关**的：只有服务型项目才有 L3 health-check；CLI / cron / 库 类项目通常只有 L1（+L2），不要硬套 health-check URL 模型（缺失即跳过，不算缺陷）。
 

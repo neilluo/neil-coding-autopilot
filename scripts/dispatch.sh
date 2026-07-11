@@ -73,9 +73,21 @@ if [ ! -f "$PROMPT_FILE" ]; then
   exit 1
 fi
 
-# Dispatch to platform-specific CLI with timeout
+# Detect a portable timeout binary: GNU `timeout` (Linux) or `gtimeout`
+# (macOS via `brew install coreutils`). macOS ships neither by default, so
+# degrade gracefully instead of dying with "timeout: command not found" (127).
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+
+# Dispatch to platform-specific CLI with timeout (when a timeout binary exists)
 run_with_timeout() {
-  timeout "$TIMEOUT" "$@" &
+  if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" != "0" ]; then
+    "$TIMEOUT_BIN" "$TIMEOUT" "$@" &
+  else
+    if [ -z "$TIMEOUT_BIN" ]; then
+      echo "WARN: no 'timeout'/'gtimeout' found; running worker without time cap (macOS: brew install coreutils)." >&2
+    fi
+    "$@" &
+  fi
   CHILD_PID=$!
   wait "$CHILD_PID"
   EXIT_CODE=$?

@@ -44,6 +44,16 @@ AI 全托管开发编排器。从需求到部署的全自动开发流水线。
 **两档都必须满足上面 HARD-GATE 的全部不变量。** 档位只决定 *怎么做*，不决定 *是否做* explore / CR / verify / evolve。
 
 > 设计自省：档位 A 的多进程编排依赖 `scripts/dispatch.sh` 作为确定性驱动；当它由交互 agent 读 SKILL 手动驱动时，实际落到档位 B。**不要假装在跑 A 却只做了 B**——显式声明当前档位，并对该档位诚实履约。
+>
+> **交互调用 `/using-neil-autopilot` ⇒ 档位 B ⇒ 无 qodercli 级 context 隔离**（编排器 context 会随任务增长）。要真正跑 **Track A（多进程隔离 + 分角色模型）**，必须由顶层 **headless** agent 驱动：
+>
+> ```bash
+> # 顶层 headless 编排器（它再循环调 scripts/dispatch.sh 逐 Task spawn worker）
+> qodercli -p "以档位 A 跑 autopilot：按 tasks.md 逐个 spawn worker" -w "$PROJECT_ROOT"
+> # 或常驻：qodercli --remote-control <id>
+> ```
+>
+> **前置**：`dispatch.sh` 的超时依赖 `timeout`/`gtimeout`（macOS 需 `brew install coreutils`；缺失时自动降级为无超时，见 dispatch.sh）。跑 Track A 前先用 `bash scripts/smoke-dispatch.sh` 冒烟自检（不烧 token）。
 
 ## 任务类型分流
 
