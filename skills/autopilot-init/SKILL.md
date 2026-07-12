@@ -193,6 +193,27 @@ autopilot/
 
 > `inbox.md` / `log.md` 等状态机文件**不预建空文件**——首次真正有来源 / 操作时（autopilot-evolve）再创建。
 
+### Step 3b: 脚手架项目 .gitignore（新项目卫生，防 git add -A 卷入生成物）
+
+新项目常无 `.gitignore`，而 `run-track-a.sh` 逐 Task `git add -A` 会把编译产物 /
+运行期哨兵卷进历史（dogfooding 实测：Python `__pycache__/*.pyc`、`autopilot/.run-active`
+都曾被误提交）。init 按 Step 1 的 Project DNA **幂等**补一份 `.gitignore`（已存在则只
+追加缺失行、不覆盖用户内容），确保在**首次 `git add -A` 之前**就位：
+
+```bash
+ensure_ignore() { grep -qxF "$1" .gitignore 2>/dev/null || printf '%s\n' "$1" >> .gitignore; }
+touch .gitignore
+ensure_ignore 'autopilot/.run-active'   # 通用：运行期哨兵（瞬时态，绝不入库）
+# 按检测到的语言追加（Project DNA）：
+#   Python: __pycache__/  *.pyc  .venv/
+#   Node:   node_modules/  dist/
+#   Java:   target/  *.class
+#   Go:     /bin/
+#   Rust:   /target/
+```
+
+> 失败方向偏「多忽略」而非「漏忽略生成物」。CR 能兜底 pyc 之类问题，但卫生应前移到 init。
+
 ### Step 4: Generate SCHEMA.md
 
 ```markdown

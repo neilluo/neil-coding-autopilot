@@ -121,6 +121,16 @@ case "$CUR" in
 esac
 
 mkdir -p autopilot/changes/${FEATURE_NAME}
+
+# 运行期哨兵：激活「控制器写码硬门禁」(hooks/guard-controller-write.sh 仅在此哨兵存在时 deny)。
+# 记录 epoch + PID 便于排障；由 finish/evolve 结束时移除。异常残留超 12h 视为陈旧，guard 自动忽略，
+# 避免误锁日常编码（人工可随时 rm -f autopilot/.run-active 逃生）。
+mkdir -p autopilot
+{ date +%s; echo "pid=$$"; echo "started=$(date '+%Y-%m-%d %H:%M:%S')"; } > autopilot/.run-active
+
+# 哨兵是瞬时运行态、非交付物：确保被 .gitignore 排除，否则 run-track-a.sh 的
+# `git add -A`（逐 Task 提交）会把它卷进被开发项目的提交历史。幂等追加。
+grep -qxF 'autopilot/.run-active' .gitignore 2>/dev/null || printf '%s\n' 'autopilot/.run-active' >> .gitignore
 ```
 
 - **档位 A**：写 `progress.md`（下方模板）作为落盘状态源。

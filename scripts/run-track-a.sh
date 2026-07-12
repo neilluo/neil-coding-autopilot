@@ -254,6 +254,12 @@ run_task() {
   # 3. commit + mark DONE — distinguish "nothing to commit" from a REAL commit
   #    failure (hook reject / signing / dirty index). A real failure must NOT be
   #    mistaken for success (fail-closed).
+  #    Mark DONE BEFORE staging so the status update is captured IN this task's
+  #    commit; otherwise the LAST task's DONE stays uncommitted and a later
+  #    `git checkout`/merge (finish) aborts on "local changes would be
+  #    overwritten". A real commit failure still fails-closed by overwriting
+  #    the status with BLOCKED below.
+  "$TASK_STATE" "$TASKS_FILE" "$n" "DONE" 2>/dev/null || true
   ( cd "$CWD" && git add -A ) 2>/dev/null || true
   if ( cd "$CWD" && git diff --cached --quiet ); then
     log "  (no staged changes — nothing to commit)"
@@ -263,7 +269,6 @@ run_task() {
     "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
     log "  Task $n commit FAILED (hook/signing/index?) → stop (fail-closed)"; exit 2
   fi
-  "$TASK_STATE" "$TASKS_FILE" "$n" "DONE" 2>/dev/null || true
   log "  Task $n DONE ✅"
 }
 
