@@ -1,0 +1,16 @@
+WARN: no 'timeout'/'gtimeout' found; running worker without time cap (macOS: brew install coreutils).
+Both files created verbatim, made executable, and smoke test passed all 8 cases.
+
+```
+PASS: controller writes src during run (exit 2)
+PASS: worker writes src (AUTOPILOT_ROLE) (exit 0)
+PASS: bypass-but-no-role writes src => deny (exit 2)
+PASS: controller writes autopilot/spec.md (exit 0)
+PASS: controller writes README.md (exit 0)
+PASS: normal coding (no sentinel) (exit 0)
+PASS: controller create_file src during run (exit 2)
+PASS: jq-missing sed-fallback still denies (exit 2)
+SMOKE-GUARD: ALL PASS
+```
+
+IMPL_STATUS=DONE

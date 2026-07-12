@@ -139,6 +139,14 @@ wc -l AGENTS.md
 > "建议执行知识库健康检查（lint）：检测矛盾/过时/孤立页/缺页/断链"
 
 
+### Step 7.9: 移除运行期哨兵（run 结束）
+
+evolve 是流程最后一环，移除「控制器写码硬门禁」哨兵（幂等，与 finish 双保险；异常残留超 12h guard 自动忽略）：
+
+```bash
+rm -f autopilot/.run-active
+```
+
 ### Step 8: 输出
 
 - 状态: `EVOLVE_STATUS=DONE`

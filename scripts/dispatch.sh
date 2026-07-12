@@ -111,6 +111,11 @@ run_with_timeout() {
   exit $EXIT_CODE
 }
 
+# Mark every dispatched worker so the controller write hard-gate
+# (hooks/guard-controller-write.sh) allows its writes. AUTOPILOT_ROLE is proven
+# to propagate to the worker's PreToolUse hook subprocess (qodercli 1.0.16).
+export AUTOPILOT_ROLE=worker
+
 case "$PLATFORM" in
   qoder)
     run_with_timeout qodercli -m "$MODEL" \

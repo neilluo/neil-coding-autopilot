@@ -5,7 +5,27 @@
         "hooks": [
           {
             "type": "command",
-            "command": "__PLUGIN_HOME__/hooks/session-start qoder"
+            "command": "${QODER_PLUGIN_ROOT}/hooks/session-start qoder"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|write|edit|create_file|write_file|search_replace|replace|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${QODER_PLUGIN_ROOT}/hooks/guard-controller-write.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|bash|shell|run_terminal_cmd|terminal|execute_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${QODER_PLUGIN_ROOT}/hooks/guard-bash-write.sh"
           }
         ]
       }

@@ -1,0 +1,60 @@
+WARN: no 'timeout'/'gtimeout' found; running worker without time cap (macOS: brew install coreutils).
+All 9 files read. Let me compile the review findings.
+
+---
+
+## Code Review: 控制器写码硬门禁（harden-controller-write-gate）
+
+### 审查维度结论
+
+**1. 判定正确性** — 正确。4层门逻辑清晰无误：
+- Tool scope filter (line 50-53) 只对 file-writing tools 触发
+- Layer 1 (line 58): sentinel 不存在 → allow ✓
+- Layer 1b (line 62-70): TTL 过期 → allow ✓
+- Layer 2 (line 78): `AUTOPILOT_ROLE=worker` → allow ✓
+- Layer 3 (line 81-90): whitelist 放行 .md / autopilot / .qoder / AGENTS.md ✓
+- Layer 4 (line 93-99): 以上都不满足 → deny ✓
+- 无逻辑漏判/误判。
+
+**2. 安全洞** — 已知项外无显著绕过路径。matcher 覆盖 `Write|Edit|MultiEdit|write|edit|create_file|write_file|search_replace|replace`，涵盖 Qoder 及 IDE 真实工具名。唯一遗漏见 Minor #1。
+
+**3. fail 方向** — 正确。
+- hook 内部出错: `trap 'exit 0' ERR` → fail-open (guard-controller-write.sh:29) ✓
+- worker 缺 role: 穿透到 layer 4 deny → fail-closed (不误放控制器) ✓
+- smoke-guard.sh 案例 #3 (line 53) 验证了 bypass 但无 role → deny ✓
+
+**4. install.sh 合并安全性** — 安全。
+- 非破坏：jq 只修改 `.hooks.PreToolUse`，其他 hook 类型（PostToolUse 等）保持不动 (install.sh:76-78) ✓
+- 幂等：先查询 command 是否已注册 (install.sh:71) ✓
+- 备份：`cp "$SETTINGS" "${SETTINGS}.bak-$(date ...)` (install.sh:74) ✓
+- 无 jq 降级：打印手动指引、不改 settings (install.sh:65-67) ✓
+- 原子写入：先写临时文件、检查非空后 mv (install.sh:76-79) ✓
+
+**5. sentinel 生命周期** — 闭环。
+- 创建: SKILL.md 初始化流程 (using-neil-autopilot:128-129) ✓
+- 移除: finish Step 6.5 (autopilot-finish:128) + evolve Step 7.9 (autopilot-evolve:148) 双保险 ✓
+- 陈旧兜底: TTL 12h (guard-controller-write.sh:61-70) + 手动 `rm -f` 逃生口 ✓
+
+**6. macOS 可移植性** — BSD 安全。
+- stat: OSTYPE 检测 → `-f '%m'` (darwin) / `-c '%Y'` (linux) (guard-controller-write.sh:62-66) ✓
+- sed: 仅用 `[[:space:]]` POSIX 类、BRE 基本正则，无 `-P/\d/\s` (guard-controller-write.sh:40) ✓
+- dispatch.sh 用 `pwd -P` 替代 `readlink -f` (dispatch.sh:17) ✓
+- 无 flock 依赖 ✓
+- 未引用 `$TMPDIR`，mktemp 用法符合 BSD ✓
+
+**7. spec 与实现一致性** — 3 处修正均一致。
+- "激活改 install.sh": install.sh 用 jq 合并进 settings.json ✓
+- "worker 只认 role": guard line 78 只看 `AUTOPILOT_ROLE`，不看 `permission_mode` ✓
+- "去 tmp 白名单": guard line 82-85 注释明确 NOT whitelisted，whitelist 无 tmp 路径 ✓
+
+---
+
+### 发现
+
+```
+[Minor] NotebookEdit 未纳入 matcher — 控制器理论上可通过 NotebookEdit 写源码(.ipynb)绕过 — hooks/guard-controller-write.sh:50-53 — 建议后续版本补入 matcher（MVP 可接受，notebook 非典型源码）
+[Minor] deny 输出 JSON 转义仅处理 \ 和 " — 路径含控制字符时输出非法 JSON — hooks/guard-controller-write.sh:95-96 — 实际路径极少含控制字符，后续可用 jq 生成整段 JSON
+[Minor] spec §6 回滚指引提到"删除 hooks-qoder.json 的 PreToolUse"但实际激活入口是 settings.json — autopilot/changes/harden-controller-write-gate/spec.md:119 — 应改为"删除 ~/.qoder/settings.json 中的 PreToolUse guard 条目"
+```
+
+REVIEW_STATUS=PASS

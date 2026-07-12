@@ -120,6 +120,14 @@ cat > $ARCHIVE_DIR/${DATE}-${FEATURE_NAME}/summary.md << EOF
 EOF
 ```
 
+### Step 6.5: 移除运行期哨兵
+
+autopilot 运行进入收尾，移除「控制器写码硬门禁」哨兵（幂等；evolve 会再移除一次作双保险，避免陈旧残留误锁日常编码）：
+
+```bash
+rm -f autopilot/.run-active
+```
+
 ### Step 7: 输出
 
 - 状态: `FINISH_STATUS=DONE`

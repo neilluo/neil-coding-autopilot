@@ -1,0 +1,15 @@
+== e2e temp folder: /var/folders/vx/q11_mycd4vq2gp06rbsf49tw0000gn/T/tmp.R09JB7Aktk ==
+== model: Performance ==
+
+[PASS] 1 controller writes src (run active, NO role)
+      expect=blocked  file_created=no  guard_denied_in_log=yes  (src/App.java)
+[PASS] 2 worker writes src (run active, AUTOPILOT_ROLE=worker)
+      expect=created  file_created=yes  guard_denied_in_log=no  (src/App.java)
+[PASS] 3 controller writes notes.md (run active, NO role)
+      expect=created  file_created=yes  guard_denied_in_log=no  (notes.md)
+[PASS] 4 normal coding writes src (NO sentinel)
+      expect=created  file_created=yes  guard_denied_in_log=no  (src/App.java)
+
+== E2E SUMMARY: 4 passed, 0 failed (of 4) ==
+temp folder kept for inspection: /var/folders/vx/q11_mycd4vq2gp06rbsf49tw0000gn/T/tmp.R09JB7Aktk
+E2E: ALL PASS
