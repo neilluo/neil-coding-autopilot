@@ -47,9 +47,13 @@ cat $CHANGE_DIR/spec.md   # 完整读取，不截断
 3. 依赖的前置 Task（如有）
 4. 验证方式（编译通过 / 测试通过 / curl 验证）
 
-### Step 4: 写入 tasks.md（档位 A）/ TodoWrite（档位 B）
+### Step 4: 写入 tasks.md（两档都产 —— run-track-a.sh 的输入）
 
-> 按 `_shared/conventions.md` 档位适配表：档位 A 把 Task 落盘为 `tasks.md`（worker 跨进程读取）；档位 B 可不写 tasks.md，直接用 TodoWrite 列 Task（拆解逻辑与格式要求相同）。
+> `tasks.md` 是 `run-track-a.sh` 的必需输入，**两档都要产**（开发一律托管，见 conventions 档位适配表）。TodoWrite 仅供档位 B 追踪**阶段级**进度，不替代 Task 列表。
+
+**粒度按 spec 大小（关键）**：
+- **小 spec（单文件 / 一处改动）→ 1 个 Task**：Task 1 直接指向 spec（`实现 spec.md 的全部内容`），近零拆解仪式，run-track-a.sh 循环一次即可。
+- **大 spec（多模块 / 多文件）→ 拆 N 个 Task**：按下方拆解原则分解，换取粒度化 CR（小 diff）、逐 Task commit、`--resume` 续跑、worker context 卫生。
 
 **文件位置**: `$CHANGE_DIR/tasks.md`
 
@@ -85,11 +89,9 @@ cat $CHANGE_DIR/spec.md   # 完整读取，不截断
 ...
 ```
 
-### Step 5: 创建工作分支
+### Step 5: 确认工作分支
 
-```bash
-git checkout -b autopilot/feature-name
-```
+分支已在 init / 实现前的分支纪律门切好（`<type>/<feature-name>`，见 `_shared/conventions.md`「分支纪律」）；plan 阶段只需确认当前不在 main/master，无需再切。
 
 ### Step 6: 输出
 

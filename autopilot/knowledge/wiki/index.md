@@ -7,6 +7,7 @@
 - [[verify-by-running]] — verify-by-running + shell 可移植性
 - [[self-contained-script-resolution]] — 分发型 plugin 自带脚本的可移植定位
 - [[track-a-launcher-pattern]] — 自主批处理用确定性脚本编排器（非 LLM 编排）
+- [[delegate-all-development]] — 控制器永不内联写码，开发一律托管子 agent
 
 ## Concepts（架构决策）
 

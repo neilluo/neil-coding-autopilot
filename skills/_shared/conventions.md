@@ -5,26 +5,28 @@
 
 ## 执行档位（见 using-neil-autopilot「执行档位」）
 
-- **档位 A · 批处理**：控制器 spawn 独立 qodercli 进程逐阶段执行，`progress.md` 落盘为状态源，`autopilot-checkpoint` 把关。
-- **档位 B · 交互**：控制器在会话内直接执行，**TodoWrite 为单一状态源**，checkpoint 以自查不变量替代，可不写 tasks.md、不 spawn worker。
+**铁律：控制器永不内联写码；loop 的开发一律经 `run-track-a.sh` 托管给 fresh qodercli worker（两档通用）。**
 
-以下约定除特别标注"（档位 A）"外，两档通用。
+- **档位 A · 无人值守**：explore/analyze/plan headless（或 spec-ready），从终端起 `run-track-a.sh` 端到端跑 loop，`progress.md` 落盘为状态源，`autopilot-checkpoint` 把关。
+- **档位 B · 交互**：控制器在会话内跑 explore/analyze/plan/finish/evolve（跟用户交互），**loop 同样调 `run-track-a.sh` 托管开发**；阶段级状态用 TodoWrite，Task 级状态由脚本写进 tasks.md。
+
+两档只差"外层阶段是否有人交互"，开发都托管。以下约定除特别标注"（档位 A）"外，两档通用。
 
 ## 档位适配表
 
-各执行层 skill **只描述一套步骤**；下表是唯一的档位差异映射（动作 → 档位 A 机制 / 档位 B 机制）。skill 内不再复制两套逻辑，遇到档位相关动作时**按本表执行**。
+各执行层 skill **只描述一套步骤**；下表是唯一的档位差异映射。**loop 的开发（执行 Task / CR / 修复）两档都经 `run-track-a.sh` 托管 qodercli，控制器不内联**——差异只在外层阶段与状态源。
 
-| 流程动作 | 档位 A（批处理） | 档位 B（交互） |
+| 流程动作 | 档位 A（无人值守） | 档位 B（交互） |
 |---------|-----------------|---------------|
-| 执行一个 Task | spawn 独立 qodercli worker（context 隔离） | 控制器在当前会话内直接实现 |
-| Task 列表来源 | `$CHANGE_DIR/tasks.md`（落盘） | TodoWrite（可不写 tasks.md） |
-| Task 状态记录 | 更新 tasks.md 的 `Status:` | 更新 TodoWrite 状态 |
+| 执行一个 Task（开发） | `run-track-a.sh` 逐 Task spawn fresh qodercli worker | 同 A：控制器调 `run-track-a.sh` 托管（不内联写码） |
+| CR / 修复 | `run-track-a.sh` 内 spawn reviewer / fixer worker | 同 A（由 `run-track-a.sh` 托管） |
+| Task 列表来源 | `$CHANGE_DIR/tasks.md`（脚本输入，必产） | `$CHANGE_DIR/tasks.md`（同；小 spec 可 1 Task） |
+| Task 状态记录 | `run-track-a.sh` 写 tasks.md 的 `Status:` | 同（脚本维护 tasks.md） |
+| 外层阶段(explore/analyze/plan/finish/evolve) | headless / spec-ready | 控制器在会话内跟用户交互 |
 | 阶段完成标记 | `autopilot-checkpoint` 写 `progress.md` | 自查前置不变量 + TodoWrite 标 COMPLETE |
-| CR 调度 | spawn reviewer worker | 控制器直接审（OCR 或内联审查） |
-| 修复 | spawn fixer worker | 控制器直接改 |
-| 恢复 / 断点续跑 | 读 `progress.md` | 读 TodoWrite 状态 |
+| 恢复 / 断点续跑 | 读 `progress.md` + `run-track-a.sh --resume` | 读 TodoWrite + `run-track-a.sh --resume` |
 
-> 状态源之所以分档：档位 A 的 worker 每次 fresh context、需外部记忆（tasks.md/progress.md）跨进程存活；档位 B 单一连续 context，TodoWrite 即足。**两档的阶段顺序与不变量完全一致**（explore/CR/verify/evolve），差异只在上表机制列。
+> **开发一律托管**：控制器（无论档位）不读源文件、不写代码、不看 diff——开发细节全在 worker 的独立 context，控制器 context 不随开发膨胀。两档的阶段顺序与不变量完全一致（explore/CR/verify/evolve），差异只在"外层阶段是否交互"。
 
 ## 路径约定
 
@@ -102,11 +104,11 @@ DISPATCH="$(resolve_dispatch)" || exit 1
 
 ## Track A 一键启动器（run-track-a.sh）
 
-`scripts/run-track-a.sh` 是基于以上原语（dispatch.sh + parse-status.sh + task-state.sh）的**确定性 bash 编排器**：从终端启动，读 `tasks.md`，逐 Task 跑 implement→verify→review→fix→commit（fail-closed，退出码 0=全 DONE / 1=用法错 / 2=BLOCKED / 130=中断）。**它是档位 A 的正确入口**——编排器是脚本（零 context、可续跑、可 dry-run），worker 是每步 fresh qodercli。不要"起一个 qodercli 当编排器让它自己循环"（把 context-rot 搬到编排器、非确定、难调试；调研依据见 `autopilot/knowledge/wiki/guides/track-a-launcher-pattern.md`）。用法/前置见 `using-neil-autopilot`「执行档位」。
+`scripts/run-track-a.sh` 是基于以上原语（dispatch.sh + parse-status.sh + task-state.sh）的**确定性 bash 编排器**：读 `tasks.md`，逐 Task 跑 implement→verify→review→fix→commit（fail-closed，退出码 0=全 DONE / 1=用法错 / 2=BLOCKED / 130=中断）。**它是两档 loop 开发的托管入口**——档位 A 从终端起、档位 B 由控制器在会话内 `bash run-track-a.sh ...` 起；编排器是脚本（零 context、可续跑、可 dry-run），worker 是每步 fresh qodercli。不要"起一个 qodercli 当编排器让它自己循环"（把 context-rot 搬到编排器、非确定、难调试；调研依据见 `autopilot/knowledge/wiki/guides/track-a-launcher-pattern.md`）。用法/前置见 `using-neil-autopilot`「执行档位」。
 
-## qodercli Worker 调度模板（档位 A）
+## qodercli Worker 调度模板
 
-> 仅档位 A 使用。档位 B 由控制器在会话内直接实现，不 spawn worker。
+> `run-track-a.sh` 内部逐 Task 按此模板 spawn worker（两档通用）；此处记录调度契约供理解与排障。**控制器不手拼裸命令、不内联写码，一律经 `run-track-a.sh` 托管。**
 
 独立进程通过以下模式调度（控制器负责填充 prompt 并执行）：
 

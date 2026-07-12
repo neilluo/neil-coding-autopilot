@@ -7,7 +7,7 @@
 
 - 项目：Neil Coding Autopilot（Qoder 插件 / AI 全托管开发编排器）
 - 形态：Markdown skill 定义集（无运行时代码；"代码"即 prompt / skill 文档）
-- 执行模型：双档（A 批处理多进程 / B 交互会话内），共享同一套阶段与不变量
+- 执行模型：控制器永不内联写码，开发一律经 run-track-a.sh 托管 qodercli；双档（A 无人值守 / B 交互）只差外层阶段是否交互，共享同一套阶段与不变量
 - 验证方式：无编译；用 grep 断言（覆盖率 / 闭环 / 残留）替代 CI
 
 ## Constraints（强制约束）
@@ -22,6 +22,7 @@
 - **C8 自带脚本可移植定位**：分发型 plugin 的自带脚本用解析出的绝对路径（env → 注入 base → 已知安装位置 → fail-closed），禁止相对 CWD 路径、禁止写死家目录/用户名。见 `wiki/guides/self-contained-script-resolution.md`。
 - **C9 分支纪律**：每次变动先开功能分支（`<type>/<name>`），实现前自检当前分支，禁止在 `main`/`master` 直接改。见 `using-neil-autopilot` HARD-GATE #2 与 `_shared/conventions.md`「分支纪律」。
 - **C10 自主批处理用确定性脚本编排**：Track A 用确定性 bash 编排器（`scripts/run-track-a.sh`）逐 Task 起 fresh worker，不用 LLM 当编排器（context-rot 搬家/非确定）；fail-closed。见 `wiki/guides/track-a-launcher-pattern.md`。
+- **C11 控制器永不内联写码**：两档的开发（implement/CR/fix）一律经 `run-track-a.sh` 托管 fresh qodercli worker；控制器只收摘要 + 状态行，不读源文件/不看 diff。交互档同样托管（"交互=内联"是伪命题）。见 `wiki/guides/delegate-all-development.md`。
 
 ## Design Principles
 

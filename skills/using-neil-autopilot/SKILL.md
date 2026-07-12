@@ -29,34 +29,37 @@ AI 全托管开发编排器。从需求到部署的全自动开发流水线。
 
 ## 执行档位（Execution Tracks）
 
-同一套流程有两种执行方式。**先判断档位，再执行**——用错档位会让机制空转（例如声称在跑批处理，实际只在单 context 内联做）。
+> **铁律：控制器永不内联写码。** 所有开发（implement→verify→review→fix→commit 内循环）**一律经 `scripts/run-track-a.sh` 托管给 fresh qodercli worker**——控制器只写 prompt、收日志摘要 + 状态行，不读源文件、不看 diff。开发细节全部活在 worker 的独立 context 里，控制器 context 不随开发膨胀。
 
-| 档位 | 何时用 | 执行机制 | 状态源 | tasks.md / checkpoint-skill / worker 进程 |
-|------|--------|---------|--------|------------------------------------------|
-| **A · 批处理 (Autonomous)** | 无人值守 / CI / 大型多 Task 构建 / 需要 context 隔离与分模型 | 控制器经 `scripts/dispatch.sh` 为每阶段/Task **spawn 独立 qodercli 进程**（context 隔离、各配模型） | `progress.md`（落盘） | 全部使用 |
-| **B · 交互 (Interactive)** | 会话内协作 / 中小改动 / 单一连续 context | 控制器（当前交互 agent）**在会话内直接实现**，不 spawn worker | **TodoWrite（单一状态源）** + 变更目录 `spec.md` | 精简：不 spawn worker、可不写 tasks.md、用 TodoWrite 代替 checkpoint-skill |
+两档**只差"外层阶段是否有人在交互"**，开发都托管、都走同一个 `run-track-a.sh`：
+
+| 档位 | 何时用 | 外层阶段(explore/analyze/plan/finish/evolve) | loop(开发) | 状态源 |
+|------|--------|----------------------------------------------|-----------|--------|
+| **A · 无人值守 (Autonomous)** | CI / 后台批量 / spec-ready / 需求已明确 | headless（spec-ready 跳过 explore/analyze） | 从终端起 `run-track-a.sh` 端到端跑完 | `progress.md` + `tasks.md`(脚本维护) |
+| **B · 交互 (Interactive)** | 会话内协作 / 需求要边聊边澄清 | 控制器在会话内跟用户跑（可随时插话） | 控制器**调 `run-track-a.sh`** 跑 loop（同样托管 qodercli） | TodoWrite(阶段级) + `tasks.md`(Task 级,脚本维护) + `spec.md` |
 
 **判定规则**：
-- 用户在交互会话里发起、期望边做边看 / 随时插话 → **档位 B**。
-- 用户要求"无人值守跑完 / headless / 后台批量 / 每阶段不同模型" → **档位 A**。
-- 拿不准 → 默认 **B**：强行 spawn 一个无法与用户交互的 worker 只会降质。
+- 需求要跟用户边聊边澄清 / 期望边做边看 → **档位 B**（交互编排 + 托管 loop）。
+- 需求已明确 / spec-ready / 无人值守 / CI → **档位 A**（终端起 run-track-a.sh 端到端）。
+- 拿不准 → 默认 **B**。
+- **无论哪档，loop 的开发都由 `run-track-a.sh` 托管给 qodercli——控制器绝不在会话内内联写码。**
 
-**两档都必须满足上面 HARD-GATE 的全部不变量。** 档位只决定 *怎么做*，不决定 *是否做* explore / CR / verify / evolve。
+**两档都必须满足 HARD-GATE 的全部不变量。** 档位只决定外层阶段是否交互，不决定是否 explore / CR / verify / evolve，也不决定开发是否托管（**永远托管**）。
 
-> 设计自省：档位 A 的多进程编排依赖 `scripts/dispatch.sh` 作为确定性驱动；当它由交互 agent 读 SKILL 手动驱动时，实际落到档位 B。**不要假装在跑 A 却只做了 B**——显式声明当前档位，并对该档位诚实履约。
->
-> **交互调用 `/using-neil-autopilot` ⇒ 档位 B ⇒ 无 qodercli 级 context 隔离**（编排器 context 会随任务增长）。要真正跑 **Track A（多进程隔离 + 分角色模型）**，用**确定性 bash 编排器** `scripts/run-track-a.sh` 从终端启动——它本身零 context、逐 Task 经 dispatch.sh spawn fresh worker，跑 implement→verify→review→fix→commit（fail-closed；退出码 0=全 DONE / 2=BLOCKED）：
->
-> ```bash
-> # 从业务项目根启动；编排器=脚本(确定性/可续跑)，worker=每步 fresh qodercli
-> bash "$PLUGIN_DIR/scripts/run-track-a.sh" \
->   --change-dir autopilot/changes/<feature> --cwd "$PROJECT_ROOT"
-> # --dry-run 先看计划(不烧 token)；--resume 断点续跑；--max-rounds N 控 CR 轮数
-> ```
->
-> 别用"起一个 qodercli 当编排器、让它自己读 SKILL 循环"——那把 context-rot 搬到编排器身上、非确定、难调试（调研结论见 `autopilot/knowledge/wiki/guides/`）。
->
-> **前置**：`run-track-a.sh` 依赖同目录 dispatch.sh / parse-status.sh / task-state.sh；超时依赖 `timeout`/`gtimeout`（macOS 需 `brew install coreutils`，缺失自动降级）。跑前先 `bash scripts/smoke-dispatch.sh` + `bash scripts/smoke-run-track-a.sh` 冒烟自检（不烧 token）。
+### run-track-a.sh —— 开发托管的唯一入口（两档通用）
+
+`scripts/run-track-a.sh` 是**确定性 bash 编排器**：读 `tasks.md`，逐 Task 经 dispatch.sh spawn fresh qodercli worker，跑 implement→verify→review→fix→commit（fail-closed；退出码 0=全 DONE / 2=BLOCKED）。编排器是脚本（零 context、可续跑、可 dry-run），worker 是每步一次性 fresh qodercli。
+
+```bash
+# 从业务项目根启动；控制器(档位 B 交互) 或终端(档位 A 无人值守) 都用这一条
+RUNNER="$(dirname "$DISPATCH")/run-track-a.sh"   # 与 dispatch.sh 同目录（$DISPATCH 解析见 conventions）
+bash "$RUNNER" --change-dir autopilot/changes/<feature> --cwd "$PROJECT_ROOT"
+# --dry-run 先看计划(不烧 token)；--resume 断点续跑；--max-rounds N 控 CR 轮数
+```
+
+- **控制器（档位 B）**：会话内 `bash run-track-a.sh ...`，只看 driver 日志摘要、不碰开发细节；跑完在会话内继续 finish/evolve。
+- 别用"起一个 qodercli 当编排器、让它自己读 SKILL 循环"——那把 context-rot 搬到编排器、非确定、难调试（调研见 `autopilot/knowledge/wiki/guides/track-a-launcher-pattern.md`）。
+- **前置**：`run-track-a.sh` 依赖同目录 dispatch.sh / parse-status.sh / task-state.sh；超时依赖 `timeout`/`gtimeout`（macOS 需 `brew install coreutils`，缺失自动降级）。跑前先 `bash scripts/smoke-dispatch.sh` + `bash scripts/smoke-run-track-a.sh` 冒烟自检（不烧 token）。
 
 ## 任务类型分流
 
@@ -80,7 +83,7 @@ autopilot/
 ├── changes/                      # 活跃的开发变更（每次 run 一个文件夹）
 │   └── <feature-name>/           # 如 add-user-registration/
 │       ├── spec.md               # 本次变更的技术方案
-│       ├── tasks.md              # Task 拆解（档位 A；档位 B 可用 TodoWrite 代替）
+│       ├── tasks.md              # Task 拆解（两档都产，run-track-a.sh 输入；小 spec 可 1 Task）
 │       ├── progress.md           # 工作流状态（档位 A）
 │       └── explore-notes.md      # 澄清阶段的对话记录摘要
 │
@@ -152,7 +155,7 @@ EOF
 
 ## 完整流程
 
-> 下图是**档位 A（批处理）**的完整编排。**档位 B（交互）** 走同样的阶段顺序与不变量，但由控制器在会话内直接执行，用 TodoWrite 记录阶段状态，checkpoint 以"自查前置不变量"替代 skill 调用。
+> 下图是完整阶段编排（两档同序）。**档位 B（交互）**：explore/analyze/plan/finish/evolve 由控制器在会话内执行、TodoWrite 记录阶段状态、checkpoint 以"自查前置不变量"替代；**loop 阶段两档都调 `run-track-a.sh` 托管 qodercli**（控制器不内联写码）。
 
 ```dot
 digraph autopilot {
@@ -220,22 +223,23 @@ digraph autopilot {
 ## Skill 调用规则
 
 ### 通用（两档都适用）
-1. 先声明当前**执行档位**（A 批处理 / B 交互）。
+1. 先声明当前**执行档位**（A 无人值守 / B 交互）。
 2. 不得跳过 **explore**（需求澄清强制）。
-3. 不得跳过 **CR**（autopilot-review；未审变更不得进入 finish）。
+3. 不得跳过 **CR**（未审变更不得进入 finish）。
 4. 不得跳过 **evolve**（知识沉淀强制）。
-5. 任何 skill / worker 报告 **BLOCKED** → 停止流程并通知用户。
+5. **loop 的开发一律经 `run-track-a.sh` 托管 qodercli**——控制器不内联写码。
+6. 任何 skill / worker 报告 **BLOCKED** → 停止流程并通知用户。
 
-### 档位 A（批处理）
-- 用 `Skill` tool 或解析出的 `$DISPATCH`（按 `_shared/conventions.md`「dispatch.sh 路径解析」得绝对路径，勿用相对 `scripts/dispatch.sh`）逐阶段调度独立进程。
+### 档位 A（无人值守）
+- explore/analyze/plan 若已 headless 就绪（或 spec-ready），从终端起 `run-track-a.sh` 端到端跑 loop。
 - 每阶段完成后调用 `Skill("autopilot-checkpoint")` 校验前置并标记 `progress.md`。
 - 阶段间完成状态以 `progress.md` 为唯一事实源。
-- checkpoint 返回 FAIL → 停止流程并通知用户。
 
 ### 档位 B（交互）
-- 控制器在会话内直接完成各阶段，**TodoWrite 为单一状态源**。
-- 以"自查前置不变量"替代 checkpoint-skill 调用；中小改动可不写 tasks.md（用 TodoWrite 列 Task）。
-- 仍需在变更目录落盘 `spec.md`（设计留痕）；`progress.md` 可选。
+- 控制器在会话内跑 explore/analyze/plan（跟用户交互）+ finish/evolve，**TodoWrite 为阶段级状态源**。
+- **loop：控制器 `bash run-track-a.sh ...` 托管开发**（只看日志摘要，不内联写码）；Task 级状态由脚本写进 tasks.md。
+- 以"自查前置不变量"替代 checkpoint-skill 调用。
+- 仍需在变更目录落盘 `spec.md`（设计留痕）+ `tasks.md`（run-track-a.sh 输入，可小到 1 Task）；`progress.md` 可选。
 
 **路由职责完全在控制器**：各 skill 只报告状态，不负责调度下一阶段。
 详细约定见 `_shared/conventions.md`。

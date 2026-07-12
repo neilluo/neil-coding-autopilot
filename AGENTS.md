@@ -4,11 +4,11 @@ AI 全托管开发编排器。从需求到部署的全自动开发流水线。
 
 ## 架构概览
 
-**执行模型（双档）**:
-- **档位 A · 批处理**：qodercli 多进程编排——控制器经 `scripts/dispatch.sh` 为每阶段/工人 spawn 独立实例，各配模型、context 隔离。用于无人值守 / CI / 大型构建。
-- **档位 B · 交互**：控制器（当前会话）会话内直接执行，TodoWrite 为单一状态源，不 spawn worker。用于会话内协作 / 中小改动。
+**执行模型（铁律：控制器永不内联写码，开发一律托管 qodercli）**:
+- **档位 A · 无人值守**：explore/analyze/plan headless（或 spec-ready），从终端起 `scripts/run-track-a.sh` 端到端跑 loop，各步 spawn fresh qodercli worker、context 隔离、分角色模型。用于 CI / 无人值守 / 大型构建。
+- **档位 B · 交互**：控制器在会话内跟用户跑 explore/analyze/plan/finish/evolve，**loop 同样调 `scripts/run-track-a.sh` 托管开发**（控制器只看日志摘要、不内联写码）。用于会话内协作 / 需求要边聊边澄清。
 
-两档共享同一套阶段与不变量（explore / CR / verify / evolve）。下方拓扑描述**档位 A**；选档规则见 `skills/using-neil-autopilot/SKILL.md` 的「执行档位」。执行层各 skill（loop/plan/finish/evolve/analyze）已 track-aware，档位差异集中在 `skills/_shared/conventions.md` 的「档位适配表」（单一事实源，不在各 skill 复制两套逻辑）。
+两档只差"外层阶段是否有人交互"，**开发都经 `run-track-a.sh` 托管给 qodercli**；共享同一套阶段与不变量（explore / CR / verify / evolve）。选档规则见 `skills/using-neil-autopilot/SKILL.md` 的「执行档位」，档位差异集中在 `skills/_shared/conventions.md` 的「档位适配表」（单一事实源）。
 
 **顶层串行流程**:
 

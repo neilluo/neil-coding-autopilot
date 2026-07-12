@@ -4,12 +4,12 @@ AI 全托管开发编排器 — 从需求到部署的全自动开发流水线。
 
 ## 简介
 
-Neil Coding Autopilot 是一个 Qoder 插件，支持两种**执行档位**：
+Neil Coding Autopilot 是一个 Qoder 插件。**铁律：控制器永不内联写码——所有开发（implement→verify→review→fix→commit）一律经 `scripts/run-track-a.sh` 托管给 fresh qodercli worker**，控制器只看日志摘要、不碰开发细节，context 不随开发膨胀。支持两种**执行档位**：
 
-- **档位 A · 批处理（Autonomous）**：通过 `scripts/run-track-a.sh` 从终端一键启动的**确定性 bash 编排器**，逐 Task 经 dispatch.sh（其路径按 `skills/_shared/conventions.md`「dispatch.sh 路径解析」解析为绝对路径，跨项目可用）spawn 独立 qodercli worker，各配不同模型、context 完全隔离。适合无人值守 / CI / 大型多 Task 构建。
-- **档位 B · 交互（Interactive）**：控制器（当前会话）在会话内直接执行各阶段，以 TodoWrite 为单一状态源，不 spawn worker。适合会话内协作 / 中小改动。
+- **档位 A · 无人值守（Autonomous）**：从终端一键起 `scripts/run-track-a.sh`（确定性 bash 编排器），逐 Task spawn fresh qodercli worker、各配模型、context 隔离。适合无人值守 / CI / spec-ready / 大型多 Task 构建。
+- **档位 B · 交互（Interactive）**：控制器在会话内跟用户跑 explore/analyze/plan/finish/evolve，**loop 同样调 `run-track-a.sh` 托管开发**。适合会话内协作 / 需求要边聊边澄清。
 
-**两档执行同一套阶段与不变量**（explore 澄清 / CR / 验证 / evolve 沉淀）：档位只决定「怎么做」，不决定「是否做」。选档规则见 `skills/using-neil-autopilot/SKILL.md` 的「执行档位」。下文架构图描述**档位 A** 的完整多进程编排。
+**两档只差"外层阶段是否有人交互"，开发都托管给 qodercli**；执行同一套阶段与不变量（explore / CR / 验证 / evolve）。选档规则见 `skills/using-neil-autopilot/SKILL.md` 的「执行档位」。
 
 **设计原则**：
 - 各 Skill 只负责自身业务逻辑，报告状态后退出
@@ -28,9 +28,9 @@ Neil Coding Autopilot 是一个 Qoder 插件，支持两种**执行档位**：
   ├─ explore (控制器自身) ─────────────►  多轮交互→explore-notes.md
   ├─ qodercli: analyze ──────────────►  产出 spec.md
   ├─ qodercli: plan ─────────────────►  产出 tasks.md
-  ├─ loop (控制器自身遍历 tasks)
+  ├─ loop = run-track-a.sh (两档都托管；控制器只启动+读摘要)
   │     ├─ qodercli: implementer ──────►  写代码
-  │     ├─ verify (控制器执行编译)
+  │     ├─ verify (脚本执行编译)
   │     ├─ qodercli: reviewer ─────────►  Code Review
   │     └─ qodercli: fixer ────────────►  修复问题
   ├─ qodercli: finish ───────────────►  PR/merge + 归档

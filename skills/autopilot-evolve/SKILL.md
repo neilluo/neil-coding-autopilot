@@ -9,7 +9,7 @@ description: "AGENTS.md自进化与知识沉淀。每次autopilot执行结束后
 
 **宣告**: "正在使用 autopilot-evolve 沉淀知识和进化 AGENTS.md。"
 
-> 档位无关：**两档（A 批处理 / B 交互）都必须执行 evolve**（知识沉淀是不变量）。evolve 只读写知识库文件，机制与档位无关。
+> 档位无关：**两档（A 无人值守 / B 交互）都必须执行 evolve**（知识沉淀是不变量）。evolve 只读写知识库文件，机制与档位无关。
 
 ## 路径约定
 

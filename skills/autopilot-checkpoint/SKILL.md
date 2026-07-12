@@ -13,7 +13,7 @@ description: "工作流门禁检查。验证 progress.md 中前置阶段已完�
 
 每个子 skill 执行完毕后、标记完成前调用。
 
-- **档位 A（批处理）**：作为独立门禁读写 `progress.md`（下方 Process）。
+- **档位 A（无人值守）**：作为独立门禁读写 `progress.md`（下方 Process）。
 - **档位 B（交互）**：退化为**自查**——控制器对照 TodoWrite 与下方前置表确认前置阶段已完成即可，不要求 progress.md 存在。核心不变量（explore / CR / verify / evolve 已发生）仍必须满足。
 
 ## Process（档位 A）
