@@ -22,6 +22,6 @@
 约束：中文；Markdown 表格语法正确；**只动 README.md 这一个文件**；不得删除或改写其它章节、mermaid 图、其它表格；改完自己跑一遍验证命令确认通过。
 
 **Verify**: `grep -q INCOMPLETE README.md && grep -q REVIEW_PASS README.md && grep -q REVIEW_FAIL README.md && grep -q mermaid README.md && [ $(grep -c '^## ' README.md) -ge 10 ]`
-**Status**: IN_PROGRESS
+**Status**: DONE
 
 ---
