@@ -11,3 +11,4 @@
 | 2026-07-11 | Evolve | 分支纪律补强：loop 加前置分支纪律门(fail-closed 自检) + conventions 标注作用域=被开发项目仓库；明确对引用方生效，非仅约束 plugin 自身开发 |
 | 2026-07-12 | Feat+E2E | 新增 run-track-a.sh（确定性 bash Track A 编排器，Ralph 范式）+ smoke-run-track-a.sh(3场景) + 修 task-state.sh flock(macOS 降级)；文档入口改指启动器；真实 E2E 从 monitor 跑通 qodercli inner loop(commit 1d41fb0)；subagent CR 修 commit-fail fail-open |
 | 2026-07-12 | Evolve | 确立铁律"控制器永不内联写码，开发一律托管 qodercli"（纠正 071201/071202 的"假 A"前提）：档位 B 的 loop 改经 run-track-a.sh 托管；6 文档 + C11；零脚本改动，回归 smoke 全绿 |
+| 2026-07-12 | Feat+E2E | dogfooding README 重写走 Track A：worker 托管产出 README(14 H2/3 mermaid/REVIEW_PASS)；撞出并修复 git add -A × 无 .gitignore 的 scratch 污染（加 .gitignore + 清理提交 e653d57）；+C12 |

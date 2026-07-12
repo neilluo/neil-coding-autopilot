@@ -23,6 +23,7 @@
 - **C9 分支纪律**：每次变动先开功能分支（`<type>/<name>`），实现前自检当前分支，禁止在 `main`/`master` 直接改。见 `using-neil-autopilot` HARD-GATE #2 与 `_shared/conventions.md`「分支纪律」。
 - **C10 自主批处理用确定性脚本编排**：Track A 用确定性 bash 编排器（`scripts/run-track-a.sh`）逐 Task 起 fresh worker，不用 LLM 当编排器（context-rot 搬家/非确定）；fail-closed。见 `wiki/guides/track-a-launcher-pattern.md`。
 - **C11 控制器永不内联写码**：两档的开发（implement/CR/fix）一律经 `run-track-a.sh` 托管 fresh qodercli worker；控制器只收摘要 + 状态行，不读源文件/不看 diff。交互档同样托管（"交互=内联"是伪命题）。见 `wiki/guides/delegate-all-development.md`。
+- **C12 自主提交需 .gitignore 兜底**：`run-track-a.sh` 的 `git add -A` 是自主提交（无控制器挑文件），依赖仓库有 `.gitignore` 屏蔽 scratch（`.DS_Store`/`*_opt.md`/日志）；否则 dogfooding 会撞出污染提交。见 `wiki/guides/verify-by-running.md`。
 
 ## Design Principles
 
