@@ -1,0 +1,12 @@
+# ── OS / editor cruft ────────────────────────────────────────────────
+.DS_Store
+*.swp
+*~
+
+# ── Scratch analysis / review notes (not part of the plugin) ──────────
+# 复盘/优化笔记（如 0711_opt.md），随手记录、不入库。
+*_opt.md
+
+# ── Track A driver logs ───────────────────────────────────────────────
+# run-track-a.sh 的日志默认写到 $TMPDIR，这里再兜一层，防止意外落到仓库内。
+.track-a-logs/

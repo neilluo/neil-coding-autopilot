@@ -1,55 +1,158 @@
 # Neil Coding Autopilot
 
-AI 全托管开发编排器 — 从需求到部署的全自动开发流水线。
+**AI 全托管开发编排器** —— 从一句需求到合并部署，全流程交给 AI，控制器自己永不写一行代码。
 
-## 简介
+## 核心理念
 
-Neil Coding Autopilot 是一个 Qoder 插件。**铁律：控制器永不内联写码——所有开发（implement→verify→review→fix→commit）一律经 `scripts/run-track-a.sh` 托管给 fresh qodercli worker**，控制器只看日志摘要、不碰开发细节，context 不随开发膨胀。支持两种**执行档位**：
+> **铁律：控制器永不内联写码。** 所有开发工作（implement → verify → review → fix → commit 内循环）一律经 `scripts/run-track-a.sh` 托管给一个全新的 qodercli worker 进程执行。
 
-- **档位 A · 无人值守（Autonomous）**：从终端一键起 `scripts/run-track-a.sh`（确定性 bash 编排器），逐 Task spawn fresh qodercli worker、各配模型、context 隔离。适合无人值守 / CI / spec-ready / 大型多 Task 构建。
-- **档位 B · 交互（Interactive）**：控制器在会话内跟用户跑 explore/analyze/plan/finish/evolve，**loop 同样调 `run-track-a.sh` 托管开发**。适合会话内协作 / 需求要边聊边澄清。
+这条铁律背后是三个具体约束：
 
-**两档只差"外层阶段是否有人交互"，开发都托管给 qodercli**；执行同一套阶段与不变量（explore / CR / 验证 / evolve）。选档规则见 `skills/using-neil-autopilot/SKILL.md` 的「执行档位」。
+1. **开发全部外包**：无论处于哪种执行档位，控制器（当前会话）从不直接读写业务代码。它只负责生成 prompt 文件、调度 `run-track-a.sh`、读取日志摘要与状态行。
+2. **控制器不读源码、不看 diff**：开发细节（读文件、写代码、跑测试、看报错）全部发生在 worker 的独立进程与独立 context 里，控制器的 context 不会随着开发工作量增长而膨胀。
+3. **Context 隔离（借鉴 Anthropic subagent offload 思想）**：每一步（implement / review / fix）都 spawn 一个 *fresh* qodercli worker，worker 用完即弃，不会把上一步的脏 context 带到下一步；编排器本身是确定性 bash 脚本（`run-track-a.sh`），零 LLM context，可续跑、可 dry-run、可审计。
 
-**设计原则**：
-- 各 Skill 只负责自身业务逻辑，报告状态后退出
-- 路由、前置验证、调度约定、**档位适配表**（执行层档位差异的单一事实源）统一在 `skills/_shared/conventions.md` 和控制器流程图中定义
-- `autopilot-checkpoint` 作为门禁机制，在阶段间强制验证（档位 A 走 skill 门禁，档位 B 走 TodoWrite 等价自查）
+这也是为什么架构里明确反对"起一个 qodercli 当编排器让它自己读 SKILL 循环"——那样只是把 context 腐化（context-rot）从 worker 转移到了编排器本身，还会让运行变得不确定、难以调试。
 
-## 架构
+## 架构总览
 
+顶层是一条按阶段串行推进的流水线，阶段之间由 `autopilot-checkpoint` 把关：
+
+```mermaid
+flowchart TD
+    A([用户需求]) --> B{"init<br/>(条件触发)"}
+    B -->|harness 不完整| B1[autopilot-init]
+    B1 --> CP1[checkpoint]
+    CP1 --> C
+    B -->|harness 已就绪| C[autopilot-explore]
+    C --> CP2[checkpoint]
+    CP2 --> D[autopilot-analyze]
+    D --> CP3[checkpoint]
+    CP3 --> E[autopilot-plan]
+    E --> CP4[checkpoint]
+    CP4 --> F["autopilot-loop<br/>(托管 run-track-a.sh)"]
+    F --> CP5[checkpoint]
+    CP5 --> G[autopilot-finish]
+    G --> CP6[checkpoint]
+    CP6 --> H[autopilot-evolve]
+    H --> CP7[checkpoint]
+    CP7 --> I([Done])
 ```
-用户需求 → init(条件) → explore(澄清) → analyze(Spec) → plan(Tasks) → loop(实现) → finish(合并+归档) → evolve(知识沉淀) → Done
+
+- `spec-ready` 任务跳过 explore/analyze，直接从 plan 起步。
+- 档位 A（无人值守）checkpoint 读写落盘的 `progress.md`；档位 B（交互）checkpoint 退化为控制器自查 TodoWrite，核心不变量（explore/CR/verify/evolve 已发生）依然强制。
+
+## loop 内循环
+
+`autopilot-loop` 阶段内部，针对**单个 Task** 的执行是一个 implement → verify → review → fix 的内循环，全程 fail-closed（任一环节失败即停，绝不静默通过）：
+
+```mermaid
+flowchart TD
+    S([Task PENDING]) --> IMPL["implement<br/>(worker: IMPLEMENTER_MODEL)"]
+    IMPL -->|Status != DONE| BLOCKED1([BLOCKED 停止])
+    IMPL -->|DONE| V["verify<br/>(控制器执行验证命令)"]
+    V -->|失败| FIX1["fixer worker<br/>(IMPLEMENTER_MODEL)"]
+    FIX1 --> V
+    V -->|通过| R["review<br/>(worker: REVIEWER_MODEL)"]
+    R -->|REVIEW_FAIL| FIX2["fixer worker<br/>按 CR 反馈修复"]
+    FIX2 --> V
+    R -->|REVIEW_PASS| COMMIT["git add -A && git commit"]
+    COMMIT -->|commit 失败<br/>hook/签名/索引问题| BLOCKED2([BLOCKED 停止])
+    COMMIT -->|成功| DONE([Task DONE])
+    V -.->|轮数耗尽 max-rounds| BLOCKED3([BLOCKED 停止])
+    R -.->|轮数耗尽 max-rounds| BLOCKED3
 ```
 
-```
-[控制器 - 当前会话]                        [Worker - 独立 qodercli 实例]
-  │                                          │
-  ├─ explore (控制器自身) ─────────────►  多轮交互→explore-notes.md
-  ├─ qodercli: analyze ──────────────►  产出 spec.md
-  ├─ qodercli: plan ─────────────────►  产出 tasks.md
-  ├─ loop = run-track-a.sh (两档都托管；控制器只启动+读摘要)
-  │     ├─ qodercli: implementer ──────►  写代码
-  │     ├─ verify (脚本执行编译)
-  │     ├─ qodercli: reviewer ─────────►  Code Review
-  │     └─ qodercli: fixer ────────────►  修复问题
-  ├─ qodercli: finish ───────────────►  PR/merge + 归档
-  └─ qodercli: evolve ───────────────►  知识双层沉淀
-```
+关键点：
+- **verify 由控制器（脚本）自己跑**，从不相信 worker 的自我报告。
+- `review` 结果是三态（见下方「HARD-GATE 不变量」附近的 REVIEW 状态表），只有明确 `REVIEW_PASS` 才允许 commit。
+- 达到 `--max-rounds`（默认 3）仍未通过，或 commit 本身失败（钩子拒绝/签名/索引脏），都会立即 `exit 2`，标记该 Task 为 `BLOCKED`，绝不假装成功。
 
-| 阶段 | 职责 |
+## 执行档位
+
+| 对比项 | 档位 A · 无人值守（Autonomous） | 档位 B · 交互（Interactive） |
+|--------|-------------------------------|------------------------------|
+| 适用场景 | CI / 后台批量 / spec-ready / 需求已明确 | 会话内协作 / 需求要边聊边澄清 |
+| 外层阶段（explore/analyze/plan/finish/evolve） | headless（spec-ready 时跳过 explore/analyze） | 控制器在会话内跟用户交互，可随时插话 |
+| loop（开发） | 从终端直接起 `run-track-a.sh` 端到端跑完 | 控制器在会话内 `bash run-track-a.sh ...` 托管 |
+| 状态源 | `progress.md` + `tasks.md`（脚本维护） | TodoWrite（阶段级）+ `tasks.md`（Task 级，脚本维护）+ `spec.md` |
+| 阶段完成标记 | `autopilot-checkpoint` 写 `progress.md` | 自查前置不变量 + TodoWrite 标记完成 |
+| 恢复/断点续跑 | 读 `progress.md` + `run-track-a.sh --resume` | 读 TodoWrite + `run-track-a.sh --resume` |
+
+**判定规则**：
+- 需求要跟用户边聊边澄清 / 期望边做边看 → **档位 B**。
+- 需求已明确 / spec-ready / 无人值守 / CI → **档位 A**。
+- 拿不准 → 默认 **B**。
+
+> 两档**只差"外层阶段是否有人在交互"**——`loop` 阶段的开发无论哪档都经 `run-track-a.sh` 托管给 qodercli worker，控制器绝不在会话内内联写码。两档共享同一套阶段顺序与不变量（explore / CR / verify / evolve）。
+
+## Skills 清单
+
+| Skill | 层级 | 职责 |
+|-------|------|------|
+| `using-neil-autopilot` | 入口 | Hook 自动注入 bootstrap context，声明执行档位、HARD-GATE、完整流程图 |
+| `autopilot-init` | 顶层阶段 | Harness 初始化/审计（AGENTS.md + hooks + knowledge/wiki），已有则评分补全 |
+| `autopilot-explore` | 顶层阶段 | 需求澄清 + 设计方向确认（强制多轮交互，HARD-GATE，不可跳过） |
+| `autopilot-analyze` | 顶层阶段 | 基于 explore 产出生成 Spec + 多轮自检 |
+| `autopilot-plan` | 顶层阶段 | 读取 Spec → 拆解原子 Task → 写入 tasks.md |
+| `autopilot-loop` | 顶层阶段 | 双层 Loop 执行器：Outer Loop 遍历 Task，Inner Loop 托管 `run-track-a.sh` 调度 worker |
+| `autopilot-review` | loop 内部组件 | Code Review 执行器（被 loop 调用，非独立阶段），产出三态 REVIEW 结果 |
+| `autopilot-finish` | 顶层阶段 | 分支完成与合并：创建 PR 或合并到主干，触发 CI/CD |
+| `autopilot-evolve` | 顶层阶段 | 知识三层沉淀（raw → wiki），把 CR 发现的规律性问题写回知识库 |
+| `autopilot-checkpoint` | 门禁 | 工作流状态验证，阻止跳步；每个阶段完成时调用 |
+
+## 底层脚本原语
+
+`scripts/` 目录下是支撑上述 Skills 运行的确定性 bash 脚本原语：
+
+| 脚本 | 职责 |
 |------|------|
-| **explore** | 需求澄清 + 设计方向确认（强制多轮交互，HARD-GATE） |
-| **analyze** | 基于 explore 产出生成 Spec + 多轮自检 |
-| **plan** | 读取 Spec → 拆解原子 Task → 写入 tasks.md |
-| **loop** | Outer Loop 遍历 Task，Inner Loop 调度 worker |
-| **finish** | 分支合并 + 产物归档到 archive/ |
-| **evolve** | 知识三层沉淀（raw → ingest → wiki，Karpathy LLM Wiki） |
+| `dispatch.sh` | 统一 Agent CLI 调度器，封装 qodercli/claude/codex 平台差异，暴露 `--model/--cwd/--prompt-file/--instruction/--timeout` 统一接口；内置超时降级（`timeout`→`gtimeout`） |
+| `parse-status.sh` | 从 worker 输出文件中鲁棒提取 Status（DONE / DONE_WITH_CONCERNS / BLOCKED / NEEDS_CONTEXT / UNKNOWN），大小写与中英文标点容错 |
+| `task-state.sh` | 原子更新 `tasks.md` 中指定 Task 的状态；并发保护优先用 `flock`，macOS 无 `flock` 时降级为 `mkdir` 原子锁 |
+| `run-track-a.sh` | Track A 一键启动器：确定性 bash 编排器，读 `tasks.md`，逐 Task 跑 implement→verify→review→fix→commit（fail-closed） |
+| `smoke-dispatch.sh` | `dispatch.sh` 的冒烟自检：用 stub 替身校验各平台 CLI 调用参数是否正确，不烧 token |
+| `smoke-run-track-a.sh` | `run-track-a.sh` 的端到端冒烟自检：模拟 HAPPY 与 FAIL-CLOSED 两种场景，不调用真实模型 |
 
-## 安装
+## 知识库三层架构
+
+`autopilot/knowledge/` 遵循 Karpathy LLM Wiki 三层架构，把"事实沉淀"与"维护规则"分层解耦：
+
+```mermaid
+flowchart TB
+    subgraph L1["Layer 1 · raw（不可变源）"]
+        direction LR
+        R1[CR 发现记录]
+        R2[踩坑经验]
+        R3[代码快照]
+    end
+    subgraph L2["Layer 2 · wiki（LLM 编译产物）"]
+        direction LR
+        W1[index]
+        W2[entities / concepts]
+        W3[guides / comparisons]
+    end
+    subgraph L3["SCHEMA.md（维护规则 + 约束）"]
+        direction LR
+        S1[项目元数据]
+        S2[维护规则 ≤200 行]
+    end
+
+    L1 -->|autopilot-evolve 编译| L2
+    L3 -.->|约束如何编译/更新| L1
+    L3 -.->|约束如何编译/更新| L2
+```
+
+- **raw**：不可变、只增量追加的原始素材（CR 发现、踩坑、代码快照），是事实的来源。
+- **wiki**：由 `autopilot-evolve` 从 raw 编译出的 LLM 可读产物（index + entities/concepts/guides/comparisons），供下一次 `autopilot-analyze` 读取。
+- **SCHEMA.md**：维护规则与项目元数据，约束 raw 如何归档、wiki 如何编译，控制整体规模（≤200 行）。
+
+## 快速开始
+
+### 1. 安装
 
 ```bash
-# 方式一：使用 neil-skill-installer（推荐）
+# 方式一：使用 neil-skill-installer（推荐，符号链接安装，本地改动即时生效）
 python3 ~/.qoder/skills/neil-skill-installer/scripts/installer.py install \
   /path/to/neil-coding-autopilot \
   --tool qoder --scope user --scope-confirmed
@@ -58,70 +161,118 @@ python3 ~/.qoder/skills/neil-skill-installer/scripts/installer.py install \
 ./install.sh
 ```
 
-## 使用
+### 2. 冒烟自检（不烧 token）
 
 ```bash
-# 从需求开始全自动开发
+bash scripts/smoke-dispatch.sh       # 校验 dispatch.sh 对各平台 CLI 的调用参数
+bash scripts/smoke-run-track-a.sh    # 端到端校验 run-track-a.sh 的 HAPPY / FAIL-CLOSED 两条路径
+```
+
+### 3. Dry-run（看计划，不真跑）
+
+```bash
+bash scripts/run-track-a.sh --change-dir autopilot/changes/<feature> --cwd "$PROJECT_ROOT" --dry-run
+```
+
+### 4. 真跑
+
+```bash
+bash scripts/run-track-a.sh --change-dir autopilot/changes/<feature> --cwd "$PROJECT_ROOT"
+# --resume 断点续跑；--max-rounds N 控制每个 Task 的 CR/fix 轮数（默认 3）
+```
+
+## 使用示例
+
+**自然语言需求**（新功能）：
+```
 /neil-coding-autopilot "添加用户注册功能，支持邮箱和手机号"
+```
 
-# 按现有 Spec 执行
+**按现有 Spec 开发**（spec-ready，跳过 explore/analyze）：
+```
 /neil-coding-autopilot "按照 spec.md 开发整个项目"
+```
 
-# GitHub Issue 驱动
+**GitHub Issue 驱动**：
+```
 /neil-coding-autopilot --issue https://github.com/user/repo/issues/42
+```
+
+**Bug 修复**（轻量 explore + 轻量 analyze）：
+```
+/neil-coding-autopilot "修复登录页面 token 过期未刷新的问题"
 ```
 
 ## 配置
 
-通过环境变量控制各阶段模型和行为：
+每个阶段可独立配置模型，通过环境变量指定：
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `AUTOPILOT_PLATFORM` | auto | qoder / claude / codex / auto（优先级 qoder>claude>codex） |
+| `AUTOPILOT_PLATFORM` | auto | qoder / claude / codex / auto（自动检测，优先级 qoder > claude > codex） |
+| `AGENT_DISPATCH` | （解析到 plugin 自带绝对路径） | 统一调度脚本；留空则按路径解析规则自动推导绝对路径，可设为绝对路径显式覆盖 |
 | `AUTOPILOT_ANALYZE_MODEL` | Ultimate | 需求分析阶段模型（需强推理） |
 | `AUTOPILOT_PLAN_MODEL` | Ultimate | Task 拆解阶段模型（需强推理） |
 | `AUTOPILOT_IMPLEMENTER_MODEL` | Performance | 编码型 worker 模型 |
 | `AUTOPILOT_REVIEWER_MODEL` | Ultimate | 审查型 worker 模型 |
 | `AUTOPILOT_FIXER_MODEL` | Performance | 修复型 worker 模型 |
+| `AUTOPILOT_INIT_MODEL` | Performance | Harness 初始化阶段模型 |
 | `AUTOPILOT_EVOLVE_MODEL` | Ultimate | 知识沉淀阶段模型（需强归纳） |
 | `AUTOPILOT_MAX_PARALLEL` | 3 | 最大并行 Task 数 |
 
-## 支持平台
+支持平台：**Qoder**（qodercli）、**Claude Code**（claude）、**Codex CLI**（codex）。
 
-- **Qoder** (qodercli)
-- **Claude Code** (claude)
-- **Codex CLI** (codex)
+## 产物目录结构
 
-## 项目结构
-
-```
-├── AGENTS.md              # AI Agent 指令文档
-├── SKILL.md               # 插件入口声明
-├── hooks/                 # Session Hook（自动注入）
-├── scripts/               # 调度脚本
-└── skills/                # 各阶段 Skill 定义
-    ├── _shared/                 # 共享约定（路径/调度/状态/路由）
-    ├── using-neil-autopilot/  # 入口编排器
-    ├── autopilot-init/       # 项目 Harness 初始化
-    ├── autopilot-explore/    # 需求澄清
-    ├── autopilot-analyze/    # Spec 生成
-    ├── autopilot-plan/       # Task 拆解
-    ├── autopilot-loop/       # 双层 Loop 执行器
-    ├── autopilot-review/     # Code Review
-    ├── autopilot-finish/     # 合并 + 归档
-    ├── autopilot-evolve/     # 知识沉淀
-    └── autopilot-checkpoint/ # 工作流门禁
-```
-
-**目标项目产物目录**（autopilot 执行时在目标项目中创建）：
+所有 autopilot 产物统一在被开发项目根目录的 `autopilot/` 下管理（按需生长，不预建空目录）：
 
 ```
 autopilot/
-├── changes/<feature>/     # 活跃变更（spec + tasks + progress）
-├── archive/              # 已完成历史变更
-├── knowledge/            # 三层知识库（SCHEMA.md + raw/ + wiki/）
-└── hooks/                # 质量门禁（post-edit + build-gate + pre-completion）
+├── changes/                      # 活跃的开发变更（每次 run 一个文件夹）
+│   └── <feature-name>/
+│       ├── spec.md               # 本次变更的技术方案
+│       ├── tasks.md              # Task 拆解（run-track-a.sh 输入；小 spec 可 1 Task）
+│       ├── progress.md           # 工作流状态（档位 A）
+│       └── explore-notes.md      # 澄清阶段的对话记录摘要
+│
+├── archive/                      # 已完成的历史变更
+│   └── YYYY-MM-DD-<feature>/
+│       ├── spec.md
+│       ├── tasks.md
+│       └── summary.md            # 完成摘要
+│
+├── knowledge/                    # Karpathy LLM Wiki 三层知识库
+│   ├── SCHEMA.md                 # 维护规则 + 项目元数据（≤200行）
+│   ├── raw/                      # Layer 1: 不可变源
+│   ├── wiki/                     # Layer 2: LLM 编译产物
+│   └── references/               # 静态框架性内容
+│
+└── hooks/                        # 质量门禁（Feedback/Sensor Layer）
+    ├── post-edit.sh              # 变更后自动检查
+    ├── build-gate.sh             # 编译验证
+    └── pre-completion.md         # 完成前自检清单
 ```
+
+## HARD-GATE 不变量
+
+无论使用哪种执行档位，以下 6 条不变量必须满足，任何 skill/worker 报告 `BLOCKED` 都会立即停止流程并通知用户：
+
+1. **需求澄清（explore）**：动手前必须确认边界与设计方向，不允许臆测。
+2. **分支纪律**：每次变动先开功能分支（`<type>/<feature-name>`，type ∈ feature/fix/refactor）；实现前自检当前分支，若在 `main`/`master` 上必须先切分支，**禁止在主干直接改**。
+3. **Code Review**：改动完成后必须经过 CR（`autopilot-review`），未审不得进入 finish。
+4. **验证**：合并/部署前必须跑通验证命令（编译/测试/自检）。
+5. **知识沉淀（evolve）**：把 CR 发现的规律与踩坑写回知识库，供下次 analyze 复用。
+6. **状态可追溯**：进度写入 `progress.md`（档位 A），或以 TodoWrite 为单一状态源（档位 B）——不靠记忆。
+
+## 跨平台与可移植性
+
+`run-track-a.sh` / `dispatch.sh` / `task-state.sh` 系列脚本均按 macOS-safe 原则编写：
+
+- **超时降级**：优先用 GNU `timeout`；macOS 默认不带 `timeout`，脚本会自动探测并降级到 `gtimeout`（`brew install coreutils` 提供），两者都缺失时打印告警并不设超时上限运行，而非直接失败。
+- **文件锁降级**：`task-state.sh` 并发更新 `tasks.md` 时优先用 `flock`（Linux）；macOS 无 `flock` 时自动降级为 `mkdir` 原子锁，语义等价。
+- **bash 3.2 兼容**：所有脚本面向 bash 3.2（macOS 系统自带版本）编写，不使用关联数组、`mapfile`、`grep -P` 等更高版本特性，解析逻辑统一用 `awk`/`sed`/`grep -E` 实现。
+- **自定位**：脚本用 `pwd -P`（而非 macOS 不自带的 `readlink -f`）解析自身所在目录，从而无论调用方 CWD 在哪都能可靠找到同目录下的兄弟脚本。
+- **依赖 bash**：整套 Track A 编排依赖 bash，macOS/Linux 开箱可用；**Windows 需通过 WSL 或 Git Bash** 运行。探测不到 bash/qodercli 的环境只能走档位 B（`autopilot-init` 会自检并告知）。
 
 ## License
 
