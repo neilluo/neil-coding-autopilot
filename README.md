@@ -65,7 +65,14 @@ flowchart TD
 
 关键点：
 - **verify 由控制器（脚本）自己跑**，从不相信 worker 的自我报告。
-- `review` 结果是三态（见下方「HARD-GATE 不变量」附近的 REVIEW 状态表），只有明确 `REVIEW_PASS` 才允许 commit。
+- `review` 结果是三态，只有明确 `REVIEW_PASS` 才允许 commit；三态见下表：
+
+| REVIEW 状态 | 判定条件 | loop 后果 |
+|-------------|----------|-----------|
+| `REVIEW_PASS` | 全部文件已审、且只有 MINOR 或无问题 | 允许 `git commit` |
+| `REVIEW_FAIL` | 存在 CRITICAL / MAJOR 问题 | 调度 fixer worker 修复后重审 |
+| `REVIEW_INCOMPLETE` | 有文件未被审查（重试后仍未消解） | 不得静默 PASS、不得进入 finish，交由控制器决定（人工审 / 缩小 diff 再审 / 显式豁免）；核心原则：未经审查的变更不能静默通过 |
+
 - 达到 `--max-rounds`（默认 3）仍未通过，或 commit 本身失败（钩子拒绝/签名/索引脏），都会立即 `exit 2`，标记该 Task 为 `BLOCKED`，绝不假装成功。
 
 ## 执行档位
