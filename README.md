@@ -291,6 +291,41 @@ autopilot/
 - **自定位**：脚本用 `pwd -P`（而非 macOS 不自带的 `readlink -f`）解析自身所在目录，从而无论调用方 CWD 在哪都能可靠找到同目录下的兄弟脚本。
 - **依赖 bash**：整套 Track A 编排依赖 bash，macOS/Linux 开箱可用；**Windows 需通过 WSL 或 Git Bash** 运行。探测不到 bash/qodercli 的环境只能走档位 B（`autopilot-init` 会自检并告知）。
 
+## 可观测性与数据驱动自进化
+
+每次跑 autopilot，各角色 worker（implementer / reviewer / fixer）的关键运行信号会自动埋点落盘到 `$NEIL_AUTOPILOT_LOG_DIR`（项目外，不入被开发项目的 git）：
+
+- `runs/YYYY-MM-DD.jsonl`：结构化事件（dispatch / round / task / run），默认 **3 天滚动删**；`runs/<run_id>/` 额外存关键 worker 输出（review 全文 + BLOCKED 步骤日志），供复盘。
+- `metrics/YYYY-MM-DD.json`：每日体检数（verify 失败率、review FAIL/INCOMPLETE 率、平均修复轮数、各角色耗时等，`jq` 确定性聚合），**长期保留**。
+- `reports/YYYY-MM-DD.md`：每天 13:00 由 `scripts/daily-analysis.sh` 定时触发，dispatch 一个 analysis agent 读取近期 metrics 趋势 + 当日 runs，产出体检摘要 + **针对插件自身角色 prompt（`run-track-a.sh` 里的 `build_impl_prompt`/`build_fix_prompt`/`build_review_prompt`）的具体改进建议**，**长期保留**。
+
+**核心原则：系统绝不自动改自己。** 报告只是建议，是否采纳、如何改插件角色 prompt，永远由人工读 `reports/` 后手动决定；遥测也绝不针对业务项目的 `AGENTS.md` 提建议（聚合数据来自多个项目，用于改插件全局 prompt 才是正确用法）。
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `NEIL_AUTOPILOT_LOG_DIR` | `$HOME/neil-autopilot-logs-analysis` | 遥测日志根目录；若落在被开发项目 `$CWD` 内会自动降级到 `$TMPDIR`，避免被 `git add -A` 卷入业务提交 |
+| `NEIL_AUTOPILOT_TELEMETRY` | `1` | 设为 `0` 全局关闭遥测（fail-safe 开关，关闭后零落盘） |
+| `NEIL_AUTOPILOT_KEEP_DAYS` | `3` | `runs/` 原始日志保留天数（`metrics/`、`reports/` 不受此影响，长期保留） |
+| `AUTOPILOT_DAILY_MODEL` | `Ultimate` | 每日 analysis agent 使用的模型 |
+
+### 安装每日定时分析
+
+```bash
+# 必须先设好 NEIL_AUTOPILOT_LOG_DIR（脚本会把解析出的绝对路径固化进 launchd plist / crontab）
+export NEIL_AUTOPILOT_LOG_DIR="$HOME/neil-autopilot-logs-analysis"
+bash scripts/install-daily-schedule.sh --hour 13
+```
+
+- macOS：生成并加载 `~/Library/LaunchAgents/com.neil.autopilot.daily.plist`，每日固定时刻触发 `scripts/daily-analysis.sh`；plist 的 `EnvironmentVariables` 固化了 `NEIL_AUTOPILOT_LOG_DIR` 与探测到的 `PATH`（launchd 不读 shell profile，故必须显式注入，保证交互式运行与定时任务解析到同一目录）。
+- Linux：脚本打印一行可粘贴的 crontab 配置。
+
+### 保留策略
+
+- `runs/`：默认 **3 天滚动删**（含事件 JSONL 与关键输出目录），由 `daily-analysis.sh` 每次运行时基于 `NEIL_AUTOPILOT_KEEP_DAYS` 触发 rotate。
+- `metrics/` + `reports/`：**长期保留，不设上限**（体量级 ~KB/天），用于跨月观察"改了角色 prompt 之后 FAIL 率有没有下降"的趋势。
+
 ## License
 
 MIT

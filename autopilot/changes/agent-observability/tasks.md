@@ -99,4 +99,4 @@
 读 `autopilot/changes/agent-observability/spec.md` 全文。**README.md** 新增"可观测性与数据驱动自进化"章节：说明能力（每次跑 autopilot 自动落 `runs/metrics/reports` 遥测；每天 13:00 分析出**针对插件角色 prompt 的改进建议**；**人工批准才改**，系统不自动改自己）；环境变量表（`NEIL_AUTOPILOT_LOG_DIR`/`NEIL_AUTOPILOT_TELEMETRY`/`NEIL_AUTOPILOT_KEEP_DAYS`/`AUTOPILOT_DAILY_MODEL`）；安装定时（`scripts/install-daily-schedule.sh`，需设 `NEIL_AUTOPILOT_LOG_DIR`）；保留策略（`runs/` 3 天滚动、`metrics/`+`reports/` 长期）。**AGENTS.md** 在脚本/平台配置处补 `telemetry.sh`/`daily-analysis.sh`/`install-daily-schedule.sh` 与新增环境变量（保持 ≤150 行，超则精简移 wiki）。保持既有文档风格。
 
 **Verify**: `grep -q NEIL_AUTOPILOT_LOG_DIR README.md && grep -qiE 'observability|遥测|可观测|telemetry' AGENTS.md`
-**Status**: PENDING
+**Status**: DONE

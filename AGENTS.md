@@ -40,6 +40,10 @@ implement(worker-cli) → verify(编译) → review(reviewer-cli) → fix(worker
 | AUTOPILOT_INIT_MODEL | Performance | Harness 初始化阶段模型 |
 | AUTOPILOT_EVOLVE_MODEL | Ultimate | 知识沉淀阶段模型（需强归纳） |
 | AUTOPILOT_MAX_PARALLEL | 3 | 最大并行 Task 数 |
+| NEIL_AUTOPILOT_LOG_DIR | `$HOME/neil-autopilot-logs-analysis` | 遥测日志根（落在业务 CWD 内自动降级到 $TMPDIR） |
+| NEIL_AUTOPILOT_TELEMETRY | 1 | 设 0 全局关闭遥测（fail-safe 开关） |
+| NEIL_AUTOPILOT_KEEP_DAYS | 3 | runs/ 原始日志保留天数（metrics/reports 长期保留） |
+| AUTOPILOT_DAILY_MODEL | Ultimate | 每日 analysis agent 模型 |
 
 **统一调度约定**:
 ```bash
@@ -51,6 +55,16 @@ $AGENT_DISPATCH --model "MODEL" --cwd "$PROJECT_ROOT" \
 - **Qoder**: qodercli -m / -w / --permission-mode bypass_permissions / --attachment / -p
 - **Claude Code**: claude -m / -p / --allowedTools / --cwd
 - **Codex CLI**: codex --model / --approval-mode full-auto / --quiet
+
+## 可观测性脚本（数据驱动自进化，见 spec: agent-observability）
+
+| 脚本 | 职责 |
+|------|------|
+| `scripts/telemetry.sh` | 可 source 的遥测 lib：emit/rotate/log_root，写侧零依赖、fail-safe（绝不污染 stdout / 不改 exit code） |
+| `scripts/daily-analysis.sh` | 每日编排：rotate runs/ → jq 聚合 metrics/ → dispatch 1 个 analysis agent 写 reports/（硬依赖 jq） |
+| `scripts/install-daily-schedule.sh` | 生成/加载每日 13:00 定时任务（macOS launchd plist / Linux crontab），固化 LOG_DIR + PATH |
+
+系统只产出**建议**（reports/，针对插件自身角色 prompt），改不改永远人工批准，绝不自动改自己。
 
 ## Skills 清单
 
