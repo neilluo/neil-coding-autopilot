@@ -49,7 +49,7 @@
 读 `autopilot/changes/agent-observability/spec.md` §5.3（权威）。顶部 `. "$SCRIPT_DIR/telemetry.sh"`；`LOG_DIR` 初始化后 `RUN_ID="$(basename "$LOG_DIR")"`。`dispatch_worker()` 加 `stage` 形参，用**命令级 env** `AUTOPILOT_STAGE="$stage" AUTOPILOT_RUN_ID="$RUN_ID" "$DISPATCH" …`（消除 sticky-export），4 个调用点传 `implement`/`fix`/`review`/`fix`。每轮 verify+review 后 emit `round` 事件；**3 处 `exit 2` 前各 emit `final_status=BLOCKED` 的 task 事件**、成功收尾 emit `DONE`；**新增独立 `trap … EXIT`**（勿与现有 `INT TERM` 合并）首行 `rc=$?`，据此 emit `run` 事件（outcome complete/blocked/interrupted）；`TASKS_DONE/TASKS_BLOCKED/RUN_ID` 装 trap 前初始化、trap 内 `${VAR:-}` 且 `[ -n "$RUN_ID" ]` 才 emit；`TASKS_BLOCKED` 在每个 `exit 2` 前自增。每轮 review 日志 + BLOCKED 步骤日志复制到 `$LOG_ROOT/runs/<run_id>/`（fail-safe，不可写静默跳过）。不破坏既有 loop 行为与退出码。
 
 **Verify**: `bash -n scripts/run-track-a.sh && bash scripts/smoke-run-track-a.sh`
-**Status**: PENDING
+**Status**: DONE
 
 ---
 

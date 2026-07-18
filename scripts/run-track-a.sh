@@ -44,11 +44,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DISPATCH="$SCRIPT_DIR/dispatch.sh"
 PARSE="$SCRIPT_DIR/parse-status.sh"
 TASK_STATE="$SCRIPT_DIR/task-state.sh"
+TELEMETRY="$SCRIPT_DIR/telemetry.sh"
 BT='`'   # backtick, for awk field-splitting on `code` spans
 
-for dep in "$DISPATCH" "$PARSE" "$TASK_STATE"; do
+for dep in "$DISPATCH" "$PARSE" "$TASK_STATE" "$TELEMETRY"; do
   [ -f "$dep" ] || { echo "ERROR: missing sibling script: $dep" >&2; exit 1; }
 done
+
+# shellcheck source=telemetry.sh
+. "$TELEMETRY"
 
 # ── defaults / args ──────────────────────────────────────────────────────────
 CHANGE_DIR=""
@@ -99,6 +103,50 @@ log() {
   if [ -n "$LOG_DIR" ]; then echo "$line" | tee -a "$LOG_DIR/driver.log"; else echo "$line"; fi
 }
 
+# ── telemetry: run-level state (init BEFORE installing the EXIT trap below) ──
+RUN_ID=""
+[ -n "$LOG_DIR" ] && RUN_ID="$(basename "$LOG_DIR")"
+TASKS_DONE=0
+TASKS_BLOCKED=0
+RUN_START_TS="$(date +%s)"
+
+# copy_artifact <src-log-file>: best-effort copy of a review/BLOCKED-step log
+# into $LOG_ROOT/runs/<run_id>/ for next-day analysis. Fail-safe: unwritable
+# LOG_ROOT or missing source is silently skipped (mirrors telemetry.sh style).
+copy_artifact() {
+  local src="${1:-}" root="" dest=""
+  {
+    if [ -n "${RUN_ID:-}" ] && [ -f "$src" ]; then
+      root="$(telemetry_log_root)"
+      if [ -n "$root" ]; then
+        dest="$root/runs/$RUN_ID"
+        mkdir -p "$dest" 2>/dev/null && cp "$src" "$dest/" 2>/dev/null
+      fi
+    fi
+  } 2>/dev/null || true
+  return 0
+}
+
+# ── telemetry: run event on EXIT (independent trap; INT/TERM trap above stays
+#    as-is so its own `exit 130` behaviour is preserved and simply flows into
+#    this EXIT trap too, which is how the "interrupted" outcome gets recorded).
+_emit_run_event_on_exit() {
+  local rc=$?
+  {
+    if [ -n "${RUN_ID:-}" ]; then
+      local outcome="complete" dur=0
+      if [ "$rc" -eq 130 ]; then
+        outcome="interrupted"
+      elif [ "${TASKS_BLOCKED:-0}" -gt 0 ] || [ "$rc" -ne 0 ]; then
+        outcome="blocked"
+      fi
+      dur=$(( $(date +%s) - ${RUN_START_TS:-$(date +%s)} ))
+      telemetry_emit_run "$RUN_ID" "$(basename "${CHANGE_DIR:-}")" "$outcome" "$dur"
+    fi
+  } 2>/dev/null || true
+}
+trap '_emit_run_event_on_exit' EXIT
+
 # ── tasks.md parsing helpers (bash-3.2 / BSD-tool safe) ──────────────────────
 task_block() {  # print the markdown block for "## Task N:" up to next task or ---
   awk -v n="$1" '
@@ -120,10 +168,13 @@ task_verify() {  # per-task **Verify**: `cmd`; fall back to global verify
 }
 
 # ── worker dispatch (captures rc without aborting under set -e) ───────────────
+# `stage` is passed as command-level env (not exported) so it never leaks
+# ("sticky-export") into a later dispatch call that forgot to set it.
 dispatch_worker() {
-  local model="$1" pfile="$2" instr="$3" outlog="$4" rc
+  local stage="$1" model="$2" pfile="$3" instr="$4" outlog="$5" rc
   set +e
   AUTOPILOT_PLATFORM="${AUTOPILOT_PLATFORM:-qoder}" \
+    AUTOPILOT_STAGE="$stage" AUTOPILOT_RUN_ID="${RUN_ID:-}" \
     "$DISPATCH" --model "$model" --cwd "$CWD" --prompt-file "$pfile" --instruction "$instr" 2>&1 | tee "$outlog"
   rc=${PIPESTATUS[0]}
   set -e
@@ -185,7 +236,7 @@ parse_review() { grep -ioE 'REVIEW_(PASS|FAIL)' "$1" 2>/dev/null | tail -1 | tr 
 
 # ── per-task inner loop ──────────────────────────────────────────────────────
 run_task() {
-  local n="$1" title status verify round=0 passed=0 st rv
+  local n="$1" title status verify round=0 passed=0 st rv verify_status committed
   title="$(task_title "$n")"; status="$(task_status "$n")"; [ -n "$status" ] || status="PENDING"
   verify="$(task_verify "$n")"
 
@@ -204,12 +255,15 @@ run_task() {
   # 1. implement
   build_impl_prompt "$n" "$LOG_DIR/task-$n-impl-prompt.md"
   log "  implement → dispatch($IMPL_MODEL)"
-  dispatch_worker "$IMPL_MODEL" "$LOG_DIR/task-$n-impl-prompt.md" \
+  dispatch_worker "implement" "$IMPL_MODEL" "$LOG_DIR/task-$n-impl-prompt.md" \
     "实现该 Task：读相关文件→写代码→跑验证命令；回复末尾输出一行 '**Status:** DONE'（做不了则 'BLOCKED' 并说明原因）。" \
     "$LOG_DIR/task-$n-impl.log"
   st="$("$PARSE" "$LOG_DIR/task-$n-impl.log")"
   if [ "$st" != "DONE" ] && [ "$st" != "DONE_WITH_CONCERNS" ]; then
     "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
+    copy_artifact "$LOG_DIR/task-$n-impl.log"
+    TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
+    telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" 0 false
     log "  Task $n BLOCKED at implement (status=$st) → stop (fail-closed)"; exit 2
   fi
 
@@ -220,13 +274,17 @@ run_task() {
       log "  verify (round $round): $verify"
       if ! ( cd "$CWD" && eval "$verify" ) >"$LOG_DIR/task-$n-verify-$round.log" 2>&1; then
         log "  verify FAILED (round $round) → fixer"
+        verify_status="fail"
+        telemetry_emit_round "${RUN_ID:-}" "$n" "$round" "$verify_status" "UNKNOWN"
         build_fix_prompt "$n" "$LOG_DIR/task-$n-verify-$round.log" "$LOG_DIR/task-$n-fix-$round-prompt.md"
-        dispatch_worker "$IMPL_MODEL" "$LOG_DIR/task-$n-fix-$round-prompt.md" \
+        dispatch_worker "fix" "$IMPL_MODEL" "$LOG_DIR/task-$n-fix-$round-prompt.md" \
           "修复验证失败的问题→重跑验证；回复末尾输出 '**Status:** DONE'。" "$LOG_DIR/task-$n-fix-$round.log"
         continue
       fi
+      verify_status="pass"
       log "  verify OK"
     else
+      verify_status="skip"
       log "  (no verify command; verify gate skipped)"
     fi
 
@@ -235,19 +293,23 @@ run_task() {
     [ -s "$LOG_DIR/task-$n-files-$round.txt" ] || echo "(no changed files detected)" > "$LOG_DIR/task-$n-files-$round.txt"
     build_review_prompt "$LOG_DIR/task-$n-files-$round.txt" "$LOG_DIR/task-$n-review-$round-prompt.md"
     log "  review (round $round) → dispatch($REVIEW_MODEL)"
-    dispatch_worker "$REVIEW_MODEL" "$LOG_DIR/task-$n-review-$round-prompt.md" \
+    dispatch_worker "review" "$REVIEW_MODEL" "$LOG_DIR/task-$n-review-$round-prompt.md" \
       "审查上述变更文件（逐一读取），回复末尾输出 REVIEW_PASS 或 REVIEW_FAIL（有 CRITICAL/MAJOR 才 FAIL 并列问题）。" \
       "$LOG_DIR/task-$n-review-$round.log"
     rv="$(parse_review "$LOG_DIR/task-$n-review-$round.log")"
+    copy_artifact "$LOG_DIR/task-$n-review-$round.log"
+    telemetry_emit_round "${RUN_ID:-}" "$n" "$round" "$verify_status" "${rv:-UNKNOWN}"
     if [ "$rv" = "REVIEW_PASS" ]; then passed=1; log "  REVIEW_PASS"; break; fi
     log "  review = ${rv:-UNKNOWN} → fail-closed, fixer"
     build_fix_prompt "$n" "$LOG_DIR/task-$n-review-$round.log" "$LOG_DIR/task-$n-fix-$round-prompt.md"
-    dispatch_worker "$IMPL_MODEL" "$LOG_DIR/task-$n-fix-$round-prompt.md" \
+    dispatch_worker "fix" "$IMPL_MODEL" "$LOG_DIR/task-$n-fix-$round-prompt.md" \
       "按 CR 反馈修复→重跑验证；回复末尾输出 '**Status:** DONE'。" "$LOG_DIR/task-$n-fix-$round.log"
   done
 
   if [ "$passed" -ne 1 ]; then
     "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
+    TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
+    telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" "$round" false
     log "  Task $n exhausted $MAX_ROUNDS rounds without REVIEW_PASS → stop (fail-closed)"; exit 2
   fi
 
@@ -262,13 +324,19 @@ run_task() {
   "$TASK_STATE" "$TASKS_FILE" "$n" "DONE" 2>/dev/null || true
   ( cd "$CWD" && git add -A ) 2>/dev/null || true
   if ( cd "$CWD" && git diff --cached --quiet ); then
+    committed=false
     log "  (no staged changes — nothing to commit)"
   elif ( cd "$CWD" && git commit -m "autopilot(track-a): Task $n — $title" >/dev/null 2>&1 ); then
+    committed=true
     log "  committed"
   else
     "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
+    TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
+    telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" "$round" false
     log "  Task $n commit FAILED (hook/signing/index?) → stop (fail-closed)"; exit 2
   fi
+  TASKS_DONE=$((TASKS_DONE + 1))
+  telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "DONE" "$round" "$committed"
   log "  Task $n DONE ✅"
 }
 
