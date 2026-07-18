@@ -16,6 +16,9 @@ set -euo pipefail
 # pwd -P (not readlink -f, which is absent on stock macOS) is macOS-safe.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
+# shellcheck source=telemetry.sh
+. "$SCRIPT_DIR/telemetry.sh"
+
 # Cleanup trap: forward SIGTERM to child process
 CHILD_PID=""
 cleanup() {
@@ -86,6 +89,8 @@ TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
 
 # Dispatch to platform-specific CLI with timeout (when a timeout binary exists)
 run_with_timeout() {
+  local START=""
+  START="$(date +%s)"
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" != "0" ]; then
     "$TIMEOUT_BIN" "$TIMEOUT" "$@" &
   else
@@ -95,18 +100,22 @@ run_with_timeout() {
     "$@" &
   fi
   CHILD_PID=$!
-  wait "$CHILD_PID"
-  EXIT_CODE=$?
+  EXIT_CODE=0
+  wait "$CHILD_PID" || EXIT_CODE=$?
   CHILD_PID=""
 
-  # Normalize timeout exit code (GNU timeout returns 124, but some return 137)
-  if [ $EXIT_CODE -eq 137 ] && [ "$TIMEOUT" != "0" ]; then
+  # Normalize timeout exit code (GNU timeout returns 124, but some return 137).
+  # Only when a timeout binary was actually used, else an external SIGKILL
+  # (e.g. OOM killer) would be mislabeled as a timeout.
+  if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" != "0" ] && [ $EXIT_CODE -eq 137 ]; then
     EXIT_CODE=124
   fi
 
   if [ $EXIT_CODE -eq 124 ]; then
     echo "ERROR: Worker timed out after ${TIMEOUT}s" >&2
   fi
+
+  { telemetry_emit_dispatch "$EXIT_CODE" "$START"; } 2>/dev/null || true
 
   exit $EXIT_CODE
 }

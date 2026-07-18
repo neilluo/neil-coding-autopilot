@@ -33,7 +33,7 @@
 读 `autopilot/changes/agent-observability/spec.md` §5.2（权威）。顶部 `. "$SCRIPT_DIR/telemetry.sh"`。核心修复：`run_with_timeout` 里把 `wait "$CHILD_PID"; EXIT_CODE=$?` 改为 `EXIT_CODE=0; wait "$CHILD_PID" || EXIT_CODE=$?`（否则 set-e 在 worker 非零时当场中止，emit 与 137→124 归一化成死代码）；**137→124 归一化仅在有 `TIMEOUT_BIN` 时做**；`START=$(date +%s)` 在启动子进程前取；在 `exit $EXIT_CODE` **之前** `{ telemetry 发 dispatch 事件（stage=$AUTOPILOT_STAGE 缺省 unknown、run_id=$AUTOPILOT_RUN_ID 缺省 <date>-<pid>、model、duration_s、exit_code）; } 2>/dev/null || true`。**铁律**：worker stdout 原样不动、`EXIT_CODE` 不被遥测改写、无遥测时行为与今天完全一致。
 
 **Verify**: `bash -n scripts/dispatch.sh && bash scripts/smoke-dispatch.sh`
-**Status**: PENDING
+**Status**: DONE
 
 ---
 
