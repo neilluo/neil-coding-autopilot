@@ -11,3 +11,7 @@
 # run-track-a.sh 的日志默认写到 $TMPDIR，这里再兜一层，防止意外落到仓库内。
 .track-a-logs/
 autopilot/.run-active
+
+# ── IDE 自动生成物（RepoWiki 等）─────────────────────────────────
+# 勿入库；否则 run-track-a.sh 的 git add -A 自主提交会被大量生成文件污染（C12）。
+.qoder/
