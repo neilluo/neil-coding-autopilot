@@ -125,12 +125,34 @@ wc -l $KNOWLEDGE_DIR/SCHEMA.md
 # 超过 200 行则要精简（将细节移入 wiki 页面）
 ```
 
-### Step 6: AGENTS.md 更新（如有架构变更）
+### Step 6: AGENTS.md 更新（门禁化自动回写）
+
+#### Step 6a: 识别候选（无源不写）
+
+仅从本轮"有据可查"的来源提取 AGENTS.md 更新候选：
+1. 本轮写入 `raw/` 且已编译进 `wiki/guides` 的规律性稳定规则（≥2 次复现，或被 CR 标记为 Major）
+2. 本轮新增/删除/改名的模块或知识页（用于修复 Doc Navigation 断链）
+3. 与 AGENTS.md 现有条目直接矛盾的新事实（标注 `[disputed]`）
+
+无候选 → 跳转 Step 6c。
+
+#### Step 6b: 门禁化写回（SearchReplace，幂等）
+
+- 每条候选必须溯源到具体 `raw/` 文件或本轮真实代码变更 — **无源不写**
+- 写入前先 grep 该规则是否已存在于 AGENTS.md，若已存在则跳过（幂等，不重复追加）
+- "新增稳定规则"：追加到 Critical Rules 或对应小节末尾，一条一行，并附 `(source: raw/{file})`
+- "Doc Navigation 修链"：用 SearchReplace 精准替换失效链接或补充新页链接，不重写整段
+- 纯推理内容标注 `[inferred]`；与现有条目矛盾的标注 `[disputed]` 并保留原条目
+- 不覆盖用户手写规则
+
+#### Step 6c: 行数守卫（始终执行）
 
 ```bash
 wc -l AGENTS.md
 # 超过 150 行则精简（细节移入 wiki/entities/）
 ```
+
+若 Step 6b 的追加导致超行，优先将旧细节移入 wiki 而非放弃新规则。
 
 ### Step 7: Lint 建议（条件触发）
 
@@ -151,6 +173,7 @@ rm -f autopilot/.run-active
 
 - 状态: `EVOLVE_STATUS=DONE`
 - 汇总: "新增 X 条 raw，更新 Y 页 wiki，新建 Z 页，SCHEMA 更新 W 处"
+- `AGENTS.md: 追加 N 条规则 / 修 M 处链接 / 精简 K 行 / 无变更`
 
 ## 约束
 

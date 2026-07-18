@@ -17,7 +17,7 @@
 再更新 Step 8 输出汇总，追加一行 `AGENTS.md: 追加 N 条规则 / 修 M 处链接 / 精简 K 行 / 无变更`。约束：中文；只改 Step 6 与 Step 8；不动其它步骤、约束段、frontmatter；改完自查 SKILL.md 仍结构完整并自己跑一遍验证命令确认通过。
 
 **Verify**: `grep -q 'SearchReplace' skills/autopilot-evolve/SKILL.md && grep -q '无源不写' skills/autopilot-evolve/SKILL.md && grep -q '幂等' skills/autopilot-evolve/SKILL.md && grep -q 'wc -l AGENTS.md' skills/autopilot-evolve/SKILL.md`
-**Status**: PENDING
+**Status**: DONE
 
 ---
 
