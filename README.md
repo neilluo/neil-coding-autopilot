@@ -20,27 +20,16 @@ flowchart LR
 
 ## 架构总览
 
-顶层是一条按阶段串行推进的流水线，阶段之间由 `autopilot-checkpoint` 把关：
+顶层是一条按阶段串行推进的流水线（每个阶段之间都由 `autopilot-checkpoint` 把关、校验前置完成才放行；下图为保持清晰省略了 checkpoint 节点）：
 
 ```mermaid
-flowchart TD
-    A([用户需求]) --> B{"init<br/>(条件触发)"}
-    B -->|harness 不完整| B1[autopilot-init]
-    B1 --> CP1[checkpoint]
-    CP1 --> C
-    B -->|harness 已就绪| C[autopilot-explore]
-    C --> CP2[checkpoint]
-    CP2 --> D[autopilot-analyze]
-    D --> CP3[checkpoint]
-    CP3 --> E[autopilot-plan]
-    E --> CP4[checkpoint]
-    CP4 --> F["autopilot-loop<br/>(托管 run-track-a.sh)"]
-    F --> CP5[checkpoint]
-    CP5 --> G[autopilot-finish]
-    G --> CP6[checkpoint]
-    CP6 --> H[autopilot-evolve]
-    H --> CP7[checkpoint]
-    CP7 --> I([Done])
+flowchart LR
+    NEED([用户需求]) --> Q{harness<br/>完整?}
+    Q -->|不完整| INIT[autopilot-init] --> EXP
+    Q -->|已就绪| EXP[autopilot-explore]
+    EXP --> ANA[autopilot-analyze] --> PLAN[autopilot-plan]
+    PLAN --> LOOP["autopilot-loop<br/>(托管 run-track-a.sh)"]
+    LOOP --> FIN[autopilot-finish] --> EVO[autopilot-evolve] --> DONE([Done])
 ```
 
 - `spec-ready` 任务跳过 explore/analyze，直接从 plan 起步。
