@@ -12,5 +12,6 @@
 ## Concepts（架构决策）
 
 ## Entities（模块 / 组件）
+- [[run-autopilot]] — Track A 端到端编排器（loop→finish→evolve），fail-closed
 
 ## Comparisons（对比分析）

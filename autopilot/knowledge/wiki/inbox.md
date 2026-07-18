@@ -12,3 +12,5 @@
 - 2026-07-12 `raw/20260712-delegate-all-development.md` → `wiki/guides/delegate-all-development.md`
 - 2026-07-12 `raw/20260712-readme-dogfooding.md` → `wiki/guides/verify-by-running.md`
 - 2026-07-12 `raw/20260712-readme-review-table.md` → `wiki/guides/verify-by-running.md`
+- 2026-07-18 `raw/20260718-self-evolution-hardening.md` → `wiki/entities/run-autopilot.md` + `wiki/guides/track-a-launcher-pattern.md`
+- 2026-07-18 `raw/20260718-symlink-vs-copy-grounding.md` → `wiki/guides/verify-by-running.md`

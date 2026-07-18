@@ -1,8 +1,8 @@
 ---
-updated: 2026-07-12
+updated: 2026-07-18
 category: guides
 evidence: primary
-sources: [raw/20260712-track-a-launcher.md]
+sources: [raw/20260712-track-a-launcher.md, raw/20260718-self-evolution-hardening.md]
 ---
 
 # 指南：自主批处理用"确定性脚本编排器"，不是"LLM 当编排器"
@@ -21,6 +21,8 @@ sources: [raw/20260712-track-a-launcher.md]
 ## 本项目落地
 
 `scripts/run-track-a.sh`（编排器）+ `dispatch.sh`（起 worker）+ `parse-status.sh`（解析状态）+ `task-state.sh`（原子改状态）。回归：`scripts/smoke-run-track-a.sh`（token-free 三场景）。入口见 `using-neil-autopilot`「执行档位」。真跑前先 `smoke-dispatch.sh` + `smoke-run-track-a.sh` 冒烟。
+
+**端到端层**：`scripts/run-autopilot.sh` 在 loop 之上串 `loop → finish → evolve`（同样是确定性脚本编排、fail-closed），`run-track-a.sh` 保持 loop-only 单一职责；详见 [[run-autopilot]]。回归：`scripts/smoke-run-autopilot.sh`。
 
 ## 出处
 

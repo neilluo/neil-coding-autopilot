@@ -64,7 +64,7 @@ $AGENT_DISPATCH --model "MODEL" --cwd "$PROJECT_ROOT" \
 | `autopilot-loop` | 顶层阶段 | Outer Loop 遍历 Task，Inner Loop 调度 worker |
 | `autopilot-review` | loop 内部组件 | OCR Code Review（被 loop 调用，非独立阶段） |
 | `autopilot-finish` | 顶层阶段 | 分支合并 + 产物归档 |
-| `autopilot-evolve` | 顶层阶段 | 知识三层沉淀（raw → ingest → wiki，从 CR/踩坑回写并编译 wiki） |
+| `autopilot-evolve` | 顶层阶段 | 知识三层沉淀（raw → ingest → wiki）+ 门禁化回写 AGENTS.md（Step 6，见 L13） |
 | `autopilot-checkpoint` | 门禁 | 工作流状态验证与标记 |
 
 ## 调用拓扑
@@ -83,7 +83,7 @@ $AGENT_DISPATCH --model "MODEL" --cwd "$PROJECT_ROOT" \
   │     └─ qodercli: fixer          ← worker 进程，修复问题
   │
   ├─ qodercli: autopilot-finish     ← 独立进程，PR/merge + 归档
-  └─ qodercli: autopilot-evolve     ← 独立进程，知识双层沉淀
+  └─ qodercli: autopilot-evolve     ← 独立进程，知识三层沉淀 + 门禁化回写 AGENTS.md
 ```
 
 ## 产物管理

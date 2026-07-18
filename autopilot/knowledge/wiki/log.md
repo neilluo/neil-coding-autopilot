@@ -13,3 +13,4 @@
 | 2026-07-12 | Evolve | 确立铁律"控制器永不内联写码，开发一律托管 qodercli"（纠正 071201/071202 的"假 A"前提）：档位 B 的 loop 改经 run-track-a.sh 托管；6 文档 + C11；零脚本改动，回归 smoke 全绿 |
 | 2026-07-12 | Feat+E2E | dogfooding README 重写走 Track A：worker 托管产出 README(14 H2/3 mermaid/REVIEW_PASS)；撞出并修复 git add -A × 无 .gitignore 的 scratch 污染（加 .gitignore + 清理提交 e653d57）；+C12 |
 | 2026-07-12 | Fix+E2E | 第二轮 dogfooding：Track A 增量修 README 悬空引用 + 补 REVIEW 三态表(INCOMPLETE 此前缺失)；RUN_RC=0/REVIEW_PASS，commit 受 .gitignore 保护无 scratch；raw 记自动门禁放过文档悬空引用的盲区 |
+| 2026-07-18 | Feat+Evolve | 补齐自进化闭环：evolve Step 6 门禁化回写 AGENTS.md + 新增 run-autopilot.sh(loop→finish→evolve,fail-closed)+smoke；dogfood 走 Track A(3 Task 全 REVIEW_PASS)；grounding 纠正调研“两份副本”误判(实为 symlink)；+2 raw / entities/run-autopilot / 2 guide 更新 / AGENTS.md 回写 2 处 |
