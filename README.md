@@ -2,17 +2,21 @@
 
 **AI 全托管开发编排器** —— 从一句需求到合并部署，全流程交给 AI，控制器自己永不写一行代码。
 
-## 核心理念
+## 一图看懂
 
-> **铁律：控制器永不内联写码。** 所有开发工作（implement → verify → review → fix → commit 内循环）一律经 `scripts/run-track-a.sh` 托管给一个全新的 qodercli worker 进程执行。
+**你给一句话需求，它自动跑完"澄清 → 方案 → 拆任务 → 写码 → 自测 → Code Review → 合并 → 知识沉淀"，交付经过审查和验证的代码变更——你自己不写一行代码。**
 
-这条铁律背后是三个具体约束：
+```mermaid
+flowchart LR
+    NEED([一句需求]) --> EXP[需求澄清] --> ANA[技术方案] --> PLAN[拆解任务]
+    PLAN --> DEV["开发内循环<br/>写码·自测·CR·修复"]
+    DEV --> MERGE[合并部署] --> EVO[知识沉淀]
+    EVO --> DONE([可合并的变更])
+```
 
-1. **开发全部外包**：无论处于哪种执行档位，控制器（当前会话）从不直接读写业务代码。它只负责生成 prompt 文件、调度 `run-track-a.sh`、读取日志摘要与状态行。
-2. **控制器不读源码、不看 diff**：开发细节（读文件、写代码、跑测试、看报错）全部发生在 worker 的独立进程与独立 context 里，控制器的 context 不会随着开发工作量增长而膨胀。
-3. **Context 隔离（借鉴 Anthropic subagent offload 思想）**：每一步（implement / review / fix）都 spawn 一个 *fresh* qodercli worker，worker 用完即弃，不会把上一步的脏 context 带到下一步；编排器本身是确定性 bash 脚本（`run-track-a.sh`），零 LLM context，可续跑、可 dry-run、可审计。
-
-这也是为什么架构里明确反对"起一个 qodercli 当编排器让它自己读 SKILL 循环"——那样只是把 context 腐化（context-rot）从 worker 转移到了编排器本身，还会让运行变得不确定、难以调试。
+| 你提供 | AI 负责 | 你得到 |
+|--------|---------|--------|
+| 一句自然语言需求（或现成 Spec / GitHub Issue） | 澄清 → 设计 → 拆解 → 编码 → 自测 → Code Review → 合并 → 知识回写，全流程编排调度 | 经 CR 与验证的代码变更 + 自动沉淀的项目知识库 |
 
 ## 架构总览
 
@@ -41,6 +45,18 @@ flowchart TD
 
 - `spec-ready` 任务跳过 explore/analyze，直接从 plan 起步。
 - 档位 A（无人值守）checkpoint 读写落盘的 `progress.md`；档位 B（交互）checkpoint 退化为控制器自查 TodoWrite，核心不变量（explore/CR/verify/evolve 已发生）依然强制。
+
+## 核心理念
+
+> **铁律：控制器永不内联写码。** 所有开发工作（implement → verify → review → fix → commit 内循环）一律经 `scripts/run-track-a.sh` 托管给一个全新的 qodercli worker 进程执行。
+
+这条铁律背后是三个具体约束：
+
+1. **开发全部外包**：无论处于哪种执行档位，控制器（当前会话）从不直接读写业务代码。它只负责生成 prompt 文件、调度 `run-track-a.sh`、读取日志摘要与状态行。
+2. **控制器不读源码、不看 diff**：开发细节（读文件、写代码、跑测试、看报错）全部发生在 worker 的独立进程与独立 context 里，控制器的 context 不会随着开发工作量增长而膨胀。
+3. **Context 隔离（借鉴 Anthropic subagent offload 思想）**：每一步（implement / review / fix）都 spawn 一个 *fresh* qodercli worker，worker 用完即弃，不会把上一步的脏 context 带到下一步；编排器本身是确定性 bash 脚本（`run-track-a.sh`），零 LLM context，可续跑、可 dry-run、可审计。
+
+这也是为什么架构里明确反对"起一个 qodercli 当编排器让它自己读 SKILL 循环"——那样只是把 context 腐化（context-rot）从 worker 转移到了编排器本身，还会让运行变得不确定、难以调试。
 
 ## loop 内循环
 
@@ -105,7 +121,7 @@ flowchart TD
 | `autopilot-loop` | 顶层阶段 | 双层 Loop 执行器：Outer Loop 遍历 Task，Inner Loop 托管 `run-track-a.sh` 调度 worker |
 | `autopilot-review` | loop 内部组件 | Code Review 执行器（被 loop 调用，非独立阶段），产出三态 REVIEW 结果 |
 | `autopilot-finish` | 顶层阶段 | 分支完成与合并：创建 PR 或合并到主干，触发 CI/CD |
-| `autopilot-evolve` | 顶层阶段 | 知识三层沉淀（raw → wiki），把 CR 发现的规律性问题写回知识库 |
+| `autopilot-evolve` | 顶层阶段 | 知识三层沉淀（raw → wiki）+ 门禁化回写 AGENTS.md，把 CR 发现的规律性问题写回知识库 |
 | `autopilot-checkpoint` | 门禁 | 工作流状态验证，阻止跳步；每个阶段完成时调用 |
 
 ## 底层脚本原语
@@ -118,8 +134,10 @@ flowchart TD
 | `parse-status.sh` | 从 worker 输出文件中鲁棒提取 Status（DONE / DONE_WITH_CONCERNS / BLOCKED / NEEDS_CONTEXT / UNKNOWN），大小写与中英文标点容错 |
 | `task-state.sh` | 原子更新 `tasks.md` 中指定 Task 的状态；并发保护优先用 `flock`，macOS 无 `flock` 时降级为 `mkdir` 原子锁 |
 | `run-track-a.sh` | Track A 一键启动器：确定性 bash 编排器，读 `tasks.md`，逐 Task 跑 implement→verify→review→fix→commit（fail-closed） |
+| `run-autopilot.sh` | Track A **端到端**编排器：在 `run-track-a.sh`(loop) 之上串 finish → evolve 三阶段，fail-closed（loop BLOCKED 即停、不接力）；档位 A 无人值守的一键入口 |
 | `smoke-dispatch.sh` | `dispatch.sh` 的冒烟自检：用 stub 替身校验各平台 CLI 调用参数是否正确，不烧 token |
 | `smoke-run-track-a.sh` | `run-track-a.sh` 的端到端冒烟自检：模拟 HAPPY 与 FAIL-CLOSED 两种场景，不调用真实模型 |
+| `smoke-run-autopilot.sh` | `run-autopilot.sh` 的冒烟自检：验证 loop→finish→evolve 全链（HAPPY）与 loop BLOCKED 不接力（FAIL-CLOSED），不烧 token |
 
 ## 知识库三层架构
 
@@ -186,6 +204,9 @@ bash scripts/run-track-a.sh --change-dir autopilot/changes/<feature> --cwd "$PRO
 ```bash
 bash scripts/run-track-a.sh --change-dir autopilot/changes/<feature> --cwd "$PROJECT_ROOT"
 # --resume 断点续跑；--max-rounds N 控制每个 Task 的 CR/fix 轮数（默认 3）
+#
+# 端到端无人值守（跑完 loop 自动接 finish + evolve，fail-closed；--skip-finish/--skip-evolve/--dry-run 可选）：
+# bash scripts/run-autopilot.sh --change-dir autopilot/changes/<feature> --cwd "$PROJECT_ROOT"
 ```
 
 ## 使用示例
