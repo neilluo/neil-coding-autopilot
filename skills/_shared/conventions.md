@@ -108,6 +108,8 @@ DISPATCH="$(resolve_dispatch)" || exit 1
 
 `scripts/run-track-a.sh` 是基于以上原语（dispatch.sh + parse-status.sh + task-state.sh）的**确定性 bash 编排器**：读 `tasks.md`，逐 Task 跑 implement→verify→review→fix→commit（fail-closed，退出码 0=全 DONE / 1=用法错 / 2=BLOCKED / 130=中断）。**它是两档 loop 开发的托管入口**——档位 A 从终端起、档位 B 由控制器在会话内 `bash run-track-a.sh ...` 起；编排器是脚本（零 context、可续跑、可 dry-run），worker 是每步 fresh qodercli。不要"起一个 qodercli 当编排器让它自己循环"（把 context-rot 搬到编排器、非确定、难调试；调研依据见 `autopilot/knowledge/wiki/guides/track-a-launcher-pattern.md`）。用法/前置见 `using-neil-autopilot`「执行档位」。
 
+`scripts/run-autopilot.sh` 在 `run-track-a.sh` 之上再加一层：链式跑完 loop（`run-track-a.sh`）→ finish → evolve 三阶段（同样 fail-closed，任一阶段 BLOCKED 即停、不接力下一阶段），是档位 A 的端到端入口；`run-track-a.sh` 本身仍只负责 loop，不受影响。
+
 ## qodercli Worker 调度模板
 
 > `run-track-a.sh` 内部逐 Task 按此模板 spawn worker（两档通用）；此处记录调度契约供理解与排障。**控制器不手拼裸命令、不内联写码，一律经 `run-track-a.sh` 托管。**

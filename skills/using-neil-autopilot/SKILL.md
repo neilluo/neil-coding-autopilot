@@ -60,6 +60,7 @@ bash "$RUNNER" --change-dir autopilot/changes/<feature> --cwd "$PROJECT_ROOT"
 - **控制器（档位 B）**：会话内 `bash run-track-a.sh ...`，只看 driver 日志摘要、不碰开发细节；跑完在会话内继续 finish/evolve。
 - 别用"起一个 qodercli 当编排器、让它自己读 SKILL 循环"——那把 context-rot 搬到编排器、非确定、难调试（调研见 `autopilot/knowledge/wiki/guides/track-a-launcher-pattern.md`）。
 - **前置**：`run-track-a.sh` 依赖同目录 dispatch.sh / parse-status.sh / task-state.sh；超时依赖 `timeout`/`gtimeout`（macOS 需 `brew install coreutils`，缺失自动降级）。跑前先 `bash scripts/smoke-dispatch.sh` + `bash scripts/smoke-run-track-a.sh` 冒烟自检（不烧 token）。
+- **`run-track-a.sh` 仍是纯 loop-only 托管入口**（只跑开发内循环）；`scripts/run-autopilot.sh` 是档位 A 的端到端编排器，链式跑完 loop（`run-track-a.sh`）→ finish → evolve 三阶段（fail-closed，任一阶段 BLOCKED 即停不接力）。跑前可先 `bash scripts/smoke-run-autopilot.sh` 冒烟自检（不烧 token）。
 
 ## 任务类型分流
 

@@ -52,6 +52,6 @@
 文档更新（增量，勿重写整节）：① `AGENTS.md`：在 scripts / 执行模型处补一句 `run-autopilot.sh` = Track A 无人值守端到端入口（loop→finish→evolve），并注明 evolve 现会门禁化回写 AGENTS.md。② `skills/using-neil-autopilot/SKILL.md`：在「执行档位」/「run-track-a.sh」附近补 `run-autopilot.sh` 为档位 A 端到端编排器（run-track-a.sh 仍是 loop-only 托管入口）。③ `skills/_shared/conventions.md`：在「Track A 一键启动器」段补 `run-autopilot.sh` 条目（loop→finish→evolve，fail-closed）。约束：中文；smoke 必须 token-free（不调真实模型）；文档只增量补充、不删除既有内容。
 
 **Verify**: `bash scripts/smoke-run-autopilot.sh && grep -q 'run-autopilot.sh' AGENTS.md`
-**Status**: PENDING
+**Status**: DONE
 
 ---
