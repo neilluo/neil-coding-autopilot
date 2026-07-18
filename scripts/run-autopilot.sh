@@ -70,7 +70,7 @@ SKIP_FINISH=false
 SKIP_EVOLVE=false
 DRY_RUN=false
 
-usage() { sed -n '2,44p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
