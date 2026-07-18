@@ -10,3 +10,4 @@
 # ── Track A driver logs ───────────────────────────────────────────────
 # run-track-a.sh 的日志默认写到 $TMPDIR，这里再兜一层，防止意外落到仓库内。
 .track-a-logs/
+autopilot/.run-active
