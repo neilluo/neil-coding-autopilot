@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+# daily-analysis.sh — deterministic daily orchestrator for agent-observability.
+#
+# WHAT: rotates raw runs/, aggregates today's runs/*.jsonl into a metrics/<date>.json
+#   via jq (deterministic), and — only when today produced new runs (save tokens) —
+#   dispatches ONE analysis agent (stage=analyze-daily) that writes reports/<date>.md
+#   and an optional metrics/<date>.categories.json fragment, which this script then
+#   merges back into metrics.json (never overwriting numeric fields).
+#
+# WHY BASH+JQ (not an LLM orchestrator, spec.md C10): rotate / numeric aggregation /
+#   fragment-merge are all deterministic — only "categorize problems + write advice"
+#   needs an LLM, and that's the one dispatched step.
+#
+# USAGE:
+#   scripts/daily-analysis.sh [--date YYYY-MM-DD] [--keep-days N] [--trend-days N] [--dry-run]
+#
+# OPTIONS:
+#   --date YYYY-MM-DD  Day to analyze (default: today).
+#   --keep-days N      runs/ retention days (default: $NEIL_AUTOPILOT_KEEP_DAYS or 3).
+#   --trend-days N     How many days of historical metrics to reference (default: 30).
+#   --dry-run          Print the plan; rotate/aggregate/dispatch nothing.
+#   -h | --help        show usage.
+#
+# ENV:
+#   NEIL_AUTOPILOT_LOG_DIR    $LOG_ROOT override (see telemetry.sh: telemetry_log_root).
+#   NEIL_AUTOPILOT_KEEP_DAYS  runs/ retention days fallback.
+#   AUTOPILOT_DAILY_MODEL     analysis agent model (default: Ultimate).
+#
+# EXIT CODES:
+#   0    ran to completion (including the "no new runs, skipped agent" path)
+#   1    usage / missing jq / unwritable $LOG_ROOT
+#
+# PORTABILITY: bash 3.2 (macOS stock); hard-depends on jq for aggregation (C6
+#   approved exception — local-only daily cron, fail-fast instead of degrading).
+
+set -euo pipefail
+
+# ── self-locate (macOS-safe; not readlink -f) ────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+DISPATCH="$SCRIPT_DIR/dispatch.sh"
+TELEMETRY="$SCRIPT_DIR/telemetry.sh"
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ERROR: 需要 jq（brew install jq）" >&2
+  exit 1
+fi
+for dep in "$DISPATCH" "$TELEMETRY"; do
+  [ -f "$dep" ] || { echo "ERROR: missing sibling script: $dep" >&2; exit 1; }
+done
+
+# shellcheck source=telemetry.sh
+. "$TELEMETRY"
+
+usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+# ── args ──────────────────────────────────────────────────────────────────────
+DATE=""
+KEEP_DAYS=""
+TREND_DAYS=30
+DRY_RUN=false
+MODEL="${AUTOPILOT_DAILY_MODEL:-Ultimate}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --date) DATE="$2"; shift 2;;
+    --keep-days) KEEP_DAYS="$2"; shift 2;;
+    --trend-days) TREND_DAYS="$2"; shift 2;;
+    --dry-run) DRY_RUN=true; shift;;
+    -h|--help) usage; exit 0;;
+    *) echo "Unknown arg: $1 (use --help)" >&2; exit 1;;
+  esac
+done
+
+[ -n "$DATE" ] || DATE="$(date +%F)"
+case "$DATE" in
+  [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
+  *) echo "ERROR: --date must be YYYY-MM-DD" >&2; exit 1;;
+esac
+
+[ -n "$KEEP_DAYS" ] || KEEP_DAYS="${NEIL_AUTOPILOT_KEEP_DAYS:-3}"
+case "$KEEP_DAYS" in ''|*[!0-9]*) echo "ERROR: --keep-days must be a positive integer" >&2; exit 1;; esac
+case "$TREND_DAYS" in ''|*[!0-9]*) echo "ERROR: --trend-days must be a positive integer" >&2; exit 1;; esac
+
+log() { echo "[daily-analysis] $*"; }
+
+LOG_ROOT="$(telemetry_log_root)"
+if [ -z "$LOG_ROOT" ]; then
+  echo "ERROR: 无法解析或写入 \${LOG_ROOT}（检查 NEIL_AUTOPILOT_LOG_DIR / 权限）" >&2
+  exit 1
+fi
+
+log "date=$DATE log_root=$LOG_ROOT keep-days=$KEEP_DAYS trend-days=$TREND_DAYS dry-run=$DRY_RUN model=$MODEL"
+
+if $DRY_RUN; then
+  log "DRY-RUN: would rotate(keep=$KEEP_DAYS), aggregate metrics/$DATE.json"
+  log "DRY-RUN: would dispatch analysis agent(model=$MODEL) only if runs/$DATE.jsonl has new events"
+  exit 0
+fi
+
+WORK_TMP="$(mktemp -d)"
+trap 'rm -rf "$WORK_TMP"' EXIT
+
+# ── 1. rotate raw runs/ ──────────────────────────────────────────────────────
+telemetry_rotate "$KEEP_DAYS"
+
+# ── 2. jq-aggregate today's runs/<date>.jsonl → metrics/<date>.json ─────────
+METRICS_FILE="$LOG_ROOT/metrics/$DATE.json"
+RAW_JSONL="$LOG_ROOT/runs/$DATE.jsonl"
+VALID_JSONL="$WORK_TMP/valid.jsonl"
+: > "$VALID_JSONL"
+
+if [ -f "$RAW_JSONL" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+    printf '%s' "$line" | jq -e . >/dev/null 2>&1 && printf '%s\n' "$line" >> "$VALID_JSONL"
+  done < "$RAW_JSONL"
+fi
+
+HAS_NEW_RUNS=false
+[ -s "$VALID_JSONL" ] && HAS_NEW_RUNS=true
+
+EVENTS_JSON="$(jq -s '.' "$VALID_JSONL" 2>/dev/null || echo '[]')"
+
+# jq aggregation program. producer->consumer mapping per spec.md §3.3.
+# commit_fail_count: task events carry committed=false for BOTH "rounds
+# exhausted" and "commit failed" blocks (run-track-a.sh emits the same
+# shape either way), so the only way to tell them apart is the LAST round
+# event for that task: a real commit failure always happens AFTER a
+# REVIEW_PASS round, while rounds-exhausted never reaches REVIEW_PASS.
+read -r -d '' JQ_AGG <<'JQEOF' || true
+def divround(a; b):
+  if b == 0 then 0
+  else (((a / b) * 100) | round) / 100
+  end;
+($events) as $e
+| ($e | map(select(.event == "run"))) as $runs
+| ($e | map(select(.event == "task"))) as $tasks
+| ($e | map(select(.event == "round"))) as $rounds
+| ($e | map(select(.event == "dispatch"))) as $dispatches
+| ($rounds | map(select(.verify == "pass" or .verify == "fail"))) as $verify_att
+| ($rounds | map(select(.verify == "fail"))) as $verify_fail
+| ($rounds | map(select(.review == "REVIEW_FAIL"))) as $review_fail
+| ($rounds | map(select(.review == "REVIEW_INCOMPLETE"))) as $review_incomplete
+| ($dispatches | map(select(.stage == "implement" or .stage == "review" or .stage == "fix"))) as $dev_dispatches
+| ($tasks | map(select(.final_status == "BLOCKED"))) as $blocked_tasks
+| {
+    date: $date,
+    runs: ($runs | length),
+    runs_blocked: ($runs | map(select(.outcome == "blocked" or .outcome == "interrupted")) | length),
+    tasks_total: ($tasks | length),
+    tasks_done: ($tasks | map(select(.final_status == "DONE")) | length),
+    tasks_blocked: ($blocked_tasks | length),
+    verify_fail_rate: divround($verify_fail | length; $verify_att | length),
+    review_fail_rounds: ($review_fail | length),
+    review_incomplete_rounds: ($review_incomplete | length),
+    review_total_rounds: ($rounds | length),
+    review_fail_rate: divround($review_fail | length; $rounds | length),
+    avg_rounds_per_task: divround(($tasks | map(.rounds // 0) | add // 0); $tasks | length),
+    dispatch_error_count: ($dev_dispatches | map(select(.exit_code != 0 and .exit_code != 124)) | length),
+    dispatch_timeout_count: ($dev_dispatches | map(select(.exit_code == 124)) | length),
+    commit_fail_count: (
+      [ $blocked_tasks[] as $t
+        | ($rounds | map(select(.run_id == $t.run_id and .task == $t.task)) | sort_by(.round) | last) as $lr
+        | select($lr != null and $lr.review == "REVIEW_PASS")
+      ] | length
+    ),
+    avg_duration_s: {
+      implement: divround(($dev_dispatches | map(select(.stage == "implement") | .duration_s) | add // 0); ($dev_dispatches | map(select(.stage == "implement")) | length)),
+      review: divround(($dev_dispatches | map(select(.stage == "review") | .duration_s) | add // 0); ($dev_dispatches | map(select(.stage == "review")) | length)),
+      fix: divround(($dev_dispatches | map(select(.stage == "fix") | .duration_s) | add // 0); ($dev_dispatches | map(select(.stage == "fix")) | length))
+    },
+    top_problem_categories: []
+  }
+JQEOF
+
+NEW_METRICS_JSON="$(LC_ALL=C jq -n --argjson events "$EVENTS_JSON" --arg date "$DATE" "$JQ_AGG")"
+
+# Re-running the same date must not silently reset a previously-merged
+# top_problem_categories back to [] — only the guarded merge step below
+# (fresh agent output) is allowed to replace it.
+if [ -f "$METRICS_FILE" ] && jq -e '(.top_problem_categories // []) | (type == "array" and length > 0)' "$METRICS_FILE" >/dev/null 2>&1; then
+  EXISTING_CATS="$(jq -c '.top_problem_categories' "$METRICS_FILE" 2>/dev/null || echo '[]')"
+  NEW_METRICS_JSON="$(printf '%s' "$NEW_METRICS_JSON" | jq --argjson c "$EXISTING_CATS" '.top_problem_categories = $c' 2>/dev/null || printf '%s' "$NEW_METRICS_JSON")"
+fi
+
+printf '%s\n' "$NEW_METRICS_JSON" > "$METRICS_FILE"
+log "metrics written: $METRICS_FILE"
+
+# ── 3. no new runs today → stop here (save tokens); else dispatch 1 analysis agent ──
+if ! $HAS_NEW_RUNS; then
+  log "no new runs for $DATE → skip analysis agent (save tokens)"
+  exit 0
+fi
+
+# build_analysis_prompt <out_file>
+# Embeds spec.md §5.5's role -> runtime-prompt-location table so advice always
+# points at the function that actually changes worker behaviour (not the
+# doc-template *-prompt.md files, which are not loaded at runtime).
+build_analysis_prompt() {
+  local out="$1"
+  local plugin_root trend_list cats_file
+  plugin_root="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+  cats_file="$LOG_ROOT/metrics/$DATE.categories.json"
+  trend_list="$(ls -1 "$LOG_ROOT/metrics" 2>/dev/null | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}\.json$' | sort | tail -n "$TREND_DAYS" || true)"
+  {
+    echo "你是一个数据分析 agent，负责基于聚合遥测数据产出针对插件自身角色 prompt 的改进建议（stage=analyze-daily，经 dispatch.sh 调度）。"
+    echo
+    echo "## 读写范围（硬约束）"
+    echo "- 只读：\$LOG_ROOT（${LOG_ROOT}，近 $TREND_DAYS 天 metrics 趋势 + 当日 runs/ 含关键输出）与插件仓库（${plugin_root}，用于定位角色 prompt 落点）。"
+    echo "- 不读任意业务项目源码。"
+    echo "- 只写：\$LOG_ROOT 下文件（reports/$DATE.md、可选 metrics/$DATE.categories.json）。产出是建议，不是改动；绝不自动改插件代码。"
+    echo
+    echo "## 角色 → 运行时 prompt 落点表（spec.md §5.5，改这里才真正改 worker 行为）"
+    echo "- implement → scripts/run-track-a.sh 的 build_impl_prompt()"
+    echo "- fix → scripts/run-track-a.sh 的 build_fix_prompt()"
+    echo "- review → scripts/run-track-a.sh 的 build_review_prompt()"
+    echo "- skills/autopilot-loop/implementer-prompt.md、skills/autopilot-review/reviewer-prompt.md 是文档模板（运行时不加载），不是运行时落点；改它们不改变 worker 行为，仅作次级同步项。"
+    echo "- 建议必须引用上述运行时落点的具体文件+函数，并标注证据来源（哪些 runs/metrics 支撑）。"
+    echo
+    echo "## 当日体检数据"
+    echo "- 当日 metrics: $METRICS_FILE"
+    echo "- 当日 runs（含关键输出目录）: $RAW_JSONL 、 $LOG_ROOT/runs/*/（若存在）"
+    echo "- 近 $TREND_DAYS 天历史 metrics 供趋势对比："
+    if [ -n "$trend_list" ]; then
+      printf '%s\n' "$trend_list" | sed "s#^#  - $LOG_ROOT/metrics/#"
+    else
+      echo "  （无历史 metrics）"
+    fi
+    echo
+    echo "## 产出要求"
+    echo "1. 写 $LOG_ROOT/reports/$DATE.md，结构：\`## 体检摘要\` | \`## 趋势\`（对比历史 metrics） | \`## 高频问题\`（定性归类 + 样例链接到 runs/） | \`## 改进建议\`（引用上面角色→落点表） | \`## 免责\`（仅建议，需人工批准，系统绝不自动改插件代码）。"
+    echo "2. 可选：把定性归类结果写 ${cats_file}——**只允许一个 JSON 数组**，形如 [{\"category\":\"空值/边界未检查\",\"count\":4}, ...]；无归类可跳过（不要写空文件/非数组）。"
+  } > "$out"
+}
+
+PROMPT_FILE="$WORK_TMP/analysis-prompt.md"
+RESULT_FILE="$WORK_TMP/analysis-result.md"
+build_analysis_prompt "$PROMPT_FILE"
+
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+log "dispatching analysis agent (stage=analyze-daily model=$MODEL)"
+if ! AUTOPILOT_STAGE="analyze-daily" AUTOPILOT_RUN_ID="$DATE" \
+    "$DISPATCH" --model "$MODEL" --cwd "$PLUGIN_ROOT" \
+    --prompt-file "$PROMPT_FILE" \
+    --instruction "分析当日遥测数据，写体检报告到 \$LOG_ROOT/reports/，可选写分类片段；只出建议不改代码。" \
+    > "$RESULT_FILE" 2>&1; then
+  log "WARN: analysis agent dispatch failed (see below) — metrics already written, report skipped"
+  tail -20 "$RESULT_FILE" 2>/dev/null | sed 's/^/  | /'
+fi
+
+# ── 4. categories fragment merge protocol (spec.md §5.4) ────────────────────
+# Guarded so a missing/empty/non-array fragment never touches metrics.json,
+# and the merge is verified valid JSON before it replaces the file — numeric
+# fields are never part of this jq expression, so they can never be clobbered.
+CATS_FILE="$LOG_ROOT/metrics/$DATE.categories.json"
+if [ -s "$CATS_FILE" ] && jq -e 'type == "array" and length > 0' "$CATS_FILE" >/dev/null 2>&1; then
+  MERGE_TMP="$WORK_TMP/metrics-merged.json"
+  if jq --slurpfile c "$CATS_FILE" '.top_problem_categories = $c[0]' "$METRICS_FILE" > "$MERGE_TMP" 2>/dev/null \
+      && jq -e . "$MERGE_TMP" >/dev/null 2>&1; then
+    mv "$MERGE_TMP" "$METRICS_FILE"
+    log "categories merged into $METRICS_FILE"
+  else
+    log "WARN: categories merge produced invalid JSON → kept previous metrics.json unchanged"
+  fi
+else
+  log "no categories fragment to merge (missing/empty/non-array) — skipped"
+fi
+
+log "done: report(s) under $LOG_ROOT/reports/, metrics under $LOG_ROOT/metrics/"
+exit 0

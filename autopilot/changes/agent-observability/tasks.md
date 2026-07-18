@@ -66,7 +66,7 @@
 读 `autopilot/changes/agent-observability/spec.md` §5.4/§3.3/§5.5（权威）。`daily-analysis.sh`（确定性编排，**硬依赖 jq**，缺失报错 `brew install jq` 退出）：自 `$SCRIPT_DIR` 定位 `DISPATCH`；解析 `$LOG_ROOT`；保留天数 `--keep-days`>`NEIL_AUTOPILOT_KEEP_DAYS`>3；`telemetry_rotate`；**jq 聚合**当日 `runs/*.jsonl`→`metrics/<date>.json`（字段见 §3.3；跳畸形行/除零产0/`LC_ALL=C`）；**当日无新 runs 则止（省 token）**；否则 dispatch 1 个 analysis agent（`stage=analyze-daily`，`model=$AUTOPILOT_DAILY_MODEL` 缺省 Ultimate），提示词内嵌 §5.5 角色→运行时落点表（`build_impl_prompt/build_fix_prompt/build_review_prompt`；`*-prompt.md` 仅文档模板），**只读 `$LOG_ROOT`+插件仓库、只写 `$LOG_ROOT`、只出建议**；写 `reports/<date>.md`；分类回填用 `if [ -s cats ] && jq -e 'type=="array" and length>0' …; then jq --slurpfile 合并+`jq -e .`校验; fi`（缺/空/非数组跳过、绝不覆盖数值字段）。支持 `--date/--trend-days`(默认30)`/--dry-run`。`smoke-daily-analysis.sh`：fixture `runs`→断言合法 `metrics.json`；回填后数值字段不变、缺片段不覆盖。
 
 **Verify**: `bash -n scripts/daily-analysis.sh && bash scripts/smoke-daily-analysis.sh`
-**Status**: PENDING
+**Status**: DONE
 
 ---
 
