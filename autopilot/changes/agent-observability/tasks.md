@@ -82,7 +82,7 @@
 读 `autopilot/changes/agent-observability/spec.md` §5.6（权威）。`install-daily-schedule.sh`：`uname -s` 判平台；`--hour` 默认 **13**；`--log-dir` 缺省取 `$NEIL_AUTOPILOT_LOG_DIR` 或默认值，解析**绝对路径**。macOS：生成 `~/Library/LaunchAgents/com.neil.autopilot.daily.plist`，`StartCalendarInterval` 每日 hour，`EnvironmentVariables` 写 `NEIL_AUTOPILOT_LOG_DIR`(绝对)+`NEIL_AUTOPILOT_KEEP_DAYS`+`PATH`；**PATH 动态构造逐个判空**（qodercli/jq/gtimeout 各 `p="$(command -v X||true)"; [ -n "$p" ] && dirs+=("$(dirname "$p")")`，**绝不注入 `.`**，缺 qodercli 报错中止）并上 `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`；`daily-analysis.sh` 绝对路径自 `$SCRIPT_DIR` 解析写入；`launchctl bootstrap gui/$UID` 兜底 `load`；打印 `export NEIL_AUTOPILOT_LOG_DIR=…` 供 profile；幂等重装先 unload/删旧。Linux：打印 crontab 行。**禁止硬编码用户名/家目录**（C8）。
 
 **Verify**: `bash -n scripts/install-daily-schedule.sh`
-**Status**: PENDING
+**Status**: DONE
 
 ---
 
