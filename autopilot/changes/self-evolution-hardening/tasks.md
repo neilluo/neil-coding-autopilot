@@ -34,7 +34,7 @@
 - **退出码**：0 全链成功 / 1 用法错 / 2 finish 或 evolve BLOCKED（或 loop 传播的 2）/ 130 中断。约束：不修改 run-track-a.sh；`bash -n` 通过；不引入 GNU-only 工具。
 
 **Verify**: `bash -n scripts/run-autopilot.sh && bash scripts/run-autopilot.sh --help >/dev/null 2>&1`
-**Status**: PENDING
+**Status**: DONE
 
 ---
 
