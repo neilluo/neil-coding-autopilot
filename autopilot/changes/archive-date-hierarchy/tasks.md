@@ -42,7 +42,7 @@
 
 ## Task 2: 新增 migrate-archive-layout.sh（扁平→四层, 幂等, fail-closed）+ 冒烟
 
-**Status**: PENDING
+**Status**: DONE
 
 **目标**: 新增确定性迁移脚本，把 `autopilot/archive/` 顶层残留的**扁平** `YYYY-MM-DD-<name>/`
 目录 git mv 到四层 `YYYY/MM/MM-DD/YYYY-MM-DD-<name>/`，供一次性迁移存量使用。
