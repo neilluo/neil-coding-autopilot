@@ -2,7 +2,7 @@
 updated: 2026-07-19
 category: guides
 evidence: primary
-sources: [raw/20260719-archive-knowledge-loop.md]
+sources: [raw/20260719-archive-knowledge-loop.md, raw/20260719-archive-date-hierarchy-and-idempotent-migration.md]
 ---
 
 # 指南：archive→knowledge 反哺闭环（让归档变成"喂未来开发的活知识"）
@@ -25,7 +25,7 @@ explore/analyze ──④翻──► kb-search.sh(本地+全局 grep, fail-safe
      └── evolve 读完成变更 → 蒸馏本地 raw→wiki → 通用者升全局 ────┘──────┘
 ```
 
-- **①挪** `scripts/archive-change.sh`：`git mv`（非 git 降级 `mv`）+ 幂等 + 缺 summary.md 生成骨架 + fail-closed。finish Step 6 调它并硬门禁化（失败即 BLOCKED）。不变量：完成变更 ∈ archive **XOR** changes（C13）。
+- **①挪** `scripts/archive-change.sh`：`git mv`（非 git 降级 `mv`）落点为四层 `archive/YYYY/MM/MM-DD/YYYY-MM-DD-<name>/`（叶子保留完整日期前缀）+ 幂等 + 缺 summary.md 生成骨架 + fail-closed。finish Step 6 调它并硬门禁化（失败即 BLOCKED）。不变量：完成变更 ∈ archive **XOR** changes（C13）。
 - **②嚼** evolve Step 1 第 5 类蒸馏源「完成变更」：读 archive 里 spec/tasks/explore-notes → 决策溯源 + 可复用模式 → raw→wiki。
 - **③升** `scripts/kb-path.sh`：全局 KB 路径**单一事实源**（env `$NEIL_AUTOPILOT_KB_DIR` → 默认 `$HOME/.neil-autopilot/knowledge` → fail-closed，C8）；evolve 把跨项目通用经验升迁至全局 raw/。
 - **④翻** `scripts/kb-search.sh`：grep 本地+全局 KB，fail-safe（无 KB/无命中→`(no prior-art hits)` exit 0，只读）。explore Step 1 / analyze Step 1b 开工前检索。
@@ -37,8 +37,17 @@ explore/analyze ──④翻──► kb-search.sh(本地+全局 grep, fail-safe
 - **路径解析单一事实源**：全局 KB 路径只由 `kb-path.sh` 解析（写侧 evolve / 读侧 kb-search 共用）。
 - **不做 embedding/向量检索**：当前规模 grep 足够，留架构余地；不回溯迁移历史草稿。
 
+## 归档规模化：四层分层 + 幂等迁移 + dedup 前置证明（2026-07-19 起）
+
+当归档条目变多，扁平 `DATE-name` 一屏几十个、难按时间检索。演进为四层 `YYYY/MM/MM-DD/YYYY-MM-DD-<feature>/`：
+
+- **叶子保留完整日期前缀，仅在其上套 3 层**（年/月/月-日）：叶子自描述、迁移即纯 `git mv` 零改名、`MM-DD` 分组天然隔离跨天重名。加深嵌套前先 grep 证明**无代码按深度 glob archive**（本项目 `kb-search.sh` 只 grep wiki/），故加层只需同步 doc/smoke。
+- **存量迁移脚本三件套**（`scripts/migrate-archive-layout.sh` + C15）：**幂等**（已在目标位/已是嵌套结构则跳过）+ **fail-closed**（mv 兜底前 `[ -e TARGET ]` 拒嵌套、任何 mv 失败 exit 1）+ **`--dry-run`**（先打印 `FROM -> TO` 不动盘）。一次性数据迁移必配 dry-run 与幂等，避免半迁移；配 token-free 冒烟断言迁移到位/嵌套跳过/再跑零变更。
+- **控制器跑已 CR 脚本做数据操作**：迁移/归档遗留/dedup 均调**已过 CR 的确定性脚本**（`migrate-archive-layout.sh` / `archive-change.sh --date <git日期>` / `git rm`），控制器不内联手改（C11）。归档遗留按 git 真实完成日期，不臆造。
+- **dedup 前置超集证明**：删任何"重复"副本前先 `diff -rq` 证明保留侧是被删侧的**超集**（复核 被删侧独有文件数=0），确认零信息损失后再 `git rm`（可 `git restore` 回退）。
+
 ## 相关
 
-- 源自 `raw/20260719-archive-knowledge-loop.md`
-- 约束见 `SCHEMA.md` C13（归档毕业不变量）/ C14（archive→knowledge 反哺闭环）
+- 源自 `raw/20260719-archive-knowledge-loop.md`、`raw/20260719-archive-date-hierarchy-and-idempotent-migration.md`
+- 约束见 `SCHEMA.md` C13（归档毕业不变量，四层）/ C14（archive→knowledge 反哺闭环）/ C15（归档布局迁移幂等）
 - 脚本坑点见 [[verify-by-running]]（pipefail+head SIGPIPE / 生成文件入库）

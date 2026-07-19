@@ -109,7 +109,7 @@ $AGENT_DISPATCH --model "MODEL" --cwd "$PROJECT_ROOT" \
 | 目录 | 职责 |
 |------|------|
 | `autopilot/changes/<name>/` | 当前活跃变更（spec + tasks + progress） |
-| `autopilot/archive/` | 已完成的历史变更 |
+| `autopilot/archive/` | 已完成的历史变更（四层 `YYYY/MM/MM-DD/YYYY-MM-DD-<name>/`，叶子保完整日期前缀；SCHEMA C13/C15，source: raw/20260719-archive-date-hierarchy-and-idempotent-migration.md） |
 | `autopilot/knowledge/` | 三层知识库（SCHEMA.md + raw/ + wiki/，Karpathy LLM Wiki 架构） |
 | `autopilot/hooks/` | 质量门禁（post-edit + build-gate + pre-completion） |
 

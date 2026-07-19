@@ -16,3 +16,4 @@
 - 2026-07-18 `raw/20260718-symlink-vs-copy-grounding.md` → `wiki/guides/verify-by-running.md`
 - 2026-07-19 `raw/20260719-archive-knowledge-loop.md` → `wiki/guides/archive-knowledge-loop.md`
 - 2026-07-19 `raw/20260719-pipefail-head-sigpipe-and-generated-file-tracking.md` → `wiki/guides/verify-by-running.md`
+- 2026-07-19 `raw/20260719-archive-date-hierarchy-and-idempotent-migration.md` → `wiki/guides/archive-knowledge-loop.md`（更新 + 全局升迁 1 条）
