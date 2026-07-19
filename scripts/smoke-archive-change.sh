@@ -44,6 +44,12 @@ mkdir -p "$REPO/autopilot/changes/foo"
 ) >/dev/null
 
 DATE_STR="2099-01-01"
+_Y="${DATE_STR%%-*}"
+_R="${DATE_STR#*-}"
+_M="${_R%%-*}"
+_D="${_R#*-}"
+_MMDD="${_M}-${_D}"
+ARCHIVE_PREFIX="autopilot/archive/${_Y}/${_M}/${_MMDD}"
 
 # ── scenario 1: move — archive/<DATE>-foo appears, changes/foo disappears ──
 run_move_scenario() {
@@ -54,14 +60,14 @@ run_move_scenario() {
     fail "move: expected exit 0, got $rc (output: $out)"
     return
   fi
-  if [ ! -d "$REPO/autopilot/archive/${DATE_STR}-foo" ]; then
-    fail "move: autopilot/archive/${DATE_STR}-foo does not exist"
+  if [ ! -d "$REPO/$ARCHIVE_PREFIX/${DATE_STR}-foo" ]; then
+    fail "move: $ARCHIVE_PREFIX/${DATE_STR}-foo does not exist"
   elif [ -d "$REPO/autopilot/changes/foo" ]; then
     fail "move: autopilot/changes/foo still exists (XOR invariant violated)"
   else
-    pass "move: archive/${DATE_STR}-foo exists AND changes/foo is gone"
+    pass "move: $ARCHIVE_PREFIX/${DATE_STR}-foo exists AND changes/foo is gone"
   fi
-  if [ ! -f "$REPO/autopilot/archive/${DATE_STR}-foo/summary.md" ]; then
+  if [ ! -f "$REPO/$ARCHIVE_PREFIX/${DATE_STR}-foo/summary.md" ]; then
     fail "move: summary.md skeleton not generated"
   else
     pass "move: summary.md skeleton generated"
@@ -76,7 +82,7 @@ run_idempotent_scenario() {
   rc=$?
   if [ "$rc" -ne 0 ]; then
     fail "idempotent: expected exit 0 on re-run, got $rc (output: $out)"
-  elif [ ! -d "$REPO/autopilot/archive/${DATE_STR}-foo" ]; then
+  elif [ ! -d "$REPO/$ARCHIVE_PREFIX/${DATE_STR}-foo" ]; then
     fail "idempotent: archive dir vanished after re-run"
   elif [ -d "$REPO/autopilot/changes/foo" ]; then
     fail "idempotent: changes/foo reappeared after re-run"
@@ -113,7 +119,7 @@ run_summary_tracked_scenario() {
     return
   fi
   local tracked
-  tracked="$(git -C "$REPO" ls-files "autopilot/archive/${DATE_STR}-${name}/summary.md")"
+  tracked="$(git -C "$REPO" ls-files "$ARCHIVE_PREFIX/${DATE_STR}-${name}/summary.md")"
   if [ -z "$tracked" ]; then
     fail "H1 summary tracked: summary.md is untracked after archive"
   else
@@ -130,7 +136,7 @@ run_summary_tracked_scenario
 # `git` shim placed earlier on PATH.
 run_target_collision_scenario() {
   local name="baz"
-  local target="$REPO/autopilot/archive/${DATE_STR}-${name}"
+  local target="$REPO/$ARCHIVE_PREFIX/${DATE_STR}-${name}"
   mkdir -p "$REPO/autopilot/changes/$name"
   (cd "$REPO" && echo "spec" > "autopilot/changes/$name/spec.md" && git add -A && git commit -q -m "add $name") >/dev/null
 

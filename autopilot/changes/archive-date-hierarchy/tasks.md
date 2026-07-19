@@ -10,7 +10,7 @@
 
 ## Task 1: 改造 archive-change.sh 为四层结构 + 更新 smoke-archive-change.sh
 
-**Status**: PENDING
+**Status**: DONE
 
 **目标**: 把 `scripts/archive-change.sh` 的归档落点从扁平 `archive/YYYY-MM-DD-<name>/`
 改为四层 `archive/YYYY/MM/MM-DD/YYYY-MM-DD-<name>/`（叶子名不变），并同步更新其冒烟测试断言。
