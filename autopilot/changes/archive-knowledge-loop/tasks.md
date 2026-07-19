@@ -61,7 +61,7 @@
 
 ## Task 3: 新增 KB 检索器 kb-search.sh + 冒烟（④翻 基础）
 
-**Status**: PENDING
+**Status**: DONE
 
 **目标**: 提供确定性、fail-safe 的"历史经验检索"底座，检索 本地 + 全局 KB，供 explore/analyze 开工调用。依赖 Task 1 的 `scripts/kb-path.sh`。
 
