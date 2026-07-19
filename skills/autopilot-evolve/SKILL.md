@@ -46,6 +46,7 @@ evolve 的核心流程：**先写 raw（不可变证据），再编译到 wiki�
 2. **编译失败** — 重复出现的编译错误模式
 3. **Task BLOCKED** — 阻塞原因和解决方式
 4. **新增模块** — 代码架构变更
+5. **完成变更** — 读取本轮 `$CHANGE_DIR`（若已被 `autopilot-finish` 搬迁，则读 `autopilot/archive/` 下对应日期目录）的 `spec.md`/`tasks.md`/`explore-notes.md`，提炼：本次做了什么、关键决策与被否决的替代方案（决策溯源）、可复用的模式/坑点
 
 ### Step 2: 写入 raw/（不可变源）
 
@@ -57,7 +58,7 @@ evolve 的核心流程：**先写 raw（不可变证据），再编译到 wiki�
 ```markdown
 ---
 created: YYYY-MM-DD
-source: evolve/cr-round-N | evolve/compile-failure | evolve/task-blocked
+source: evolve/cr-round-N | evolve/compile-failure | evolve/task-blocked | evolve/completed-change
 evidence: primary
 ---
 
@@ -104,6 +105,34 @@ evidence: primary
 - 纯推理内容标注 `[inferred]`，不得标注 `[primary]`
 - 与现有 wiki 矛盾时标注 `[disputed]`，不直接覆盖
 - inferred 内容占比不超过 30%
+
+### Step 3.5: 全局升迁（跨项目通用经验 → 全局 KB）
+
+对 Step 2/3 中判定为**跨项目通用**（不依赖本项目具体技术栈/业务逻辑，例如流程模式、工具设计原则、通用踩坑）的经验，额外写一份到全局 KB；**项目特定经验只留本地 `$KNOWLEDGE_DIR/raw/`，不做此步**。
+
+脚本自身用相对 `scripts/` 不可靠（本 skill 运行在业务项目 CWD 下），按 `_shared/conventions.md`「dispatch.sh 路径解析」同款范式解析出绝对路径：
+
+```bash
+export SKILL_BASE_DIR="<注入的 Base directory for this skill 绝对路径>"
+resolve_script() {
+  local name="$1"
+  local base="${SKILL_BASE_DIR:-}" root="${SKILL_BASE_DIR:-}"; root="${root%/skills/*}"
+  [ -n "${base}" ] && [ -f "${root}/scripts/${name}" ] && { printf '%s\n' "${root}/scripts/${name}"; return 0; }
+  local cand="${HOME}/.qoder/skills/neil-coding-autopilot/scripts/${name}"
+  [ -f "${cand}" ] && { printf '%s\n' "${cand}"; return 0; }
+  echo "ERROR: ${name} not found" >&2; return 1
+}
+KB_PATH="$(resolve_script kb-path.sh)" || { echo "跳过全局升迁：定位不到 kb-path.sh"; }
+GLOBAL_KB="$("$KB_PATH" --ensure)"
+```
+
+将通用经验以同样的 frontmatter 格式（`source: evolve/completed-change` 等，`evidence` 与本地一致）写入 `$GLOBAL_KB/raw/{YYYYMMDD}-{slug}.md`。
+
+**沿用现有回写门禁**：
+- 必须溯源到本地已写入的 raw 文件 — **无源不写**
+- 纯推理内容标注 `[inferred]`，占比不超过 30%
+- 与全局 KB 现有内容矛盾时标注 `[disputed]`，不直接覆盖
+- 全局 `raw/` 同样 append-only，不修改已写入文件
 
 ### Step 4: 更新操作日志
 
@@ -172,7 +201,7 @@ rm -f autopilot/.run-active
 ### Step 8: 输出
 
 - 状态: `EVOLVE_STATUS=DONE`
-- 汇总: "新增 X 条 raw，更新 Y 页 wiki，新建 Z 页，SCHEMA 更新 W 处"
+- 汇总: "新增 X 条 raw，更新 Y 页 wiki，新建 Z 页，SCHEMA 更新 W 处，全局升迁 V 条"
 - `AGENTS.md: 追加 N 条规则 / 修 M 处链接 / 精简 K 行 / 无变更`
 
 ## 约束
@@ -182,8 +211,9 @@ rm -f autopilot/.run-active
 - 不删除已有 wiki 页面（只更新或归档）
 - 不记录密码/密钥/个人信息
 - 每次 evolve 单次 ingest 不超过 15 页更新
-- raw/ 文件一旦写入不可修改（append-only 语义）
+- raw/ 文件一旦写入不可修改（append-only 语义，本地与全局 KB 均适用）
 - 回写门禁严格执行：无源不写、推理标 [inferred]、矛盾标 [disputed]
+- 项目特定经验只留本地，不升迁全局 KB
 
 ## 完成报告
 

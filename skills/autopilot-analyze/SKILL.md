@@ -67,6 +67,8 @@ cat $KNOWLEDGE_DIR/wiki/index.md 2>/dev/null || echo "No wiki index yet"
 # 例如: cat $KNOWLEDGE_DIR/wiki/concepts/retry-mechanism.md
 ```
 
+除本地 wiki 外，同时读取 explore-notes.md 中「## 历史经验命中」段（Step 1a 已读入），并可选再跑一次 `scripts/kb-search.sh` 覆盖全局 KB，把命中的既往决策/坑点作为 Spec 约束纳入（沿用下方收集优先级：explore 产出 > KB 约束 > 项目配置）。
+
 #### Step 1c: 项目配置
 
 ```bash
