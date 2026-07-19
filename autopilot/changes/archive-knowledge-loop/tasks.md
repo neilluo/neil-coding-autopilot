@@ -84,7 +84,7 @@
 
 ## Task 4: explore/analyze 接入历史经验检索（④翻 接线）
 
-**Status**: PENDING
+**Status**: DONE
 
 **目标**: 让每次开发开工前检索 本地+全局 历史经验并纳入设计，使归档真正"喂回"未来开发。依赖 Task 3 的 `scripts/kb-search.sh`。
 
