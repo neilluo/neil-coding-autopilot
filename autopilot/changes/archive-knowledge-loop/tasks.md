@@ -99,7 +99,7 @@
 
 ## Task 5: evolve 增"完成变更"蒸馏源 + 通用经验升迁全局（②嚼 + ③升 消费）
 
-**Status**: PENDING
+**Status**: DONE
 
 **目标**: 让归档的**内容**被蒸馏进知识库（本地 + 通用者升全局），这是让归档有真实作用的核心。依赖 Task 1 的 `scripts/kb-path.sh`。
 
