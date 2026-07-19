@@ -130,6 +130,7 @@ cat $KNOWLEDGE_DIR/wiki/index.md 2>/dev/null || echo "No wiki index yet"
 1. Bug 的复现路径/触发条件
 2. 期望的正确行为
 3. 修复范围（是否涉及数据库/API 变更）
+4. 若改动用户可观测输出：该值的 SSOT + ≥1 条判别性蜕变关系（见 `_shared/observable-acceptance.md`）
 
 ### Step 3: 提出 2-3 个实现方案
 
@@ -185,6 +186,8 @@ cat $KNOWLEDGE_DIR/wiki/index.md 2>/dev/null || echo "No wiki index yet"
 
 **等待用户确认**: 用户说"确认"/"可以"/"go" 后才解锁下一阶段。
 如果用户提出修改意见，调整后重新呈现，直到确认。
+
+> 可观测验收（user-facing 改动必附）：对每个用户可观测输出值/态给出 SSOT + 不变量 + 蜕变关系（多源值含判别样例，含空/部分/打架三态）；详见 `_shared/observable-acceptance.md`。
 
 ### Step 5: 大项目分解判断
 

@@ -102,6 +102,7 @@ cat AGENTS.md 2>/dev/null || echo "No AGENTS.md"
 5. 核心接口 / 类型定义（用项目自身语言表达）
 6. 部署方案
 7. 里程碑 / Phase 规划
+8. 可观测验收（Observable Acceptance）：对每个用户可观测输出值/态给出 SSOT + 不变量 + 蜕变关系（多源值必带判别样例、含空/部分/打架三态）；禁实现口径。先查 KB doctrine 推导，查不到覆盖真歧义才登记 `[NEEDS CLARIFICATION]`。详见 `_shared/observable-acceptance.md`。user-facing 改动缺此段且无可证伪免除 → `ANALYZE_STATUS=BLOCKED|{原因}`
 
 ### Step 4: 自检循环（2-3轮）
 
@@ -111,7 +112,7 @@ cat AGENTS.md 2>/dev/null || echo "No AGENTS.md"
 |------|---------|
 | 第1轮 | 架构合理性、技术可行性、安全性 |
 | 第2轮 | 用户体验、部署运维、成本 |
-| 第3轮 | 边界情况、扩展性、MVP聚焦度 |
+| 第3轮 | 边界情况、扩展性、MVP聚焦度；可观测验收完备性（多源值有判别性 MR？扰动轴覆盖全部非权威源？SSOT 摆明？实现口径泄漏？——均 WARN 自修不 BLOCK） |
 
 **自检方式**: 档位 A——控制器按 `_shared/conventions.md` 调度模板生成自检 prompt、调度独立审查实例；档位 B——控制器在会话内直接自检（同样 2-3 轮维度）。
 

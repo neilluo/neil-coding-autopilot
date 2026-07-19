@@ -46,6 +46,7 @@ cat $CHANGE_DIR/spec.md   # 完整读取，不截断
 2. 具体的实现要求（接口签名、方法逻辑）
 3. 依赖的前置 Task（如有）
 4. 验证方式（编译通过 / 测试通过 / curl 验证）
+5. 若改动用户可观测输出：SSOT + 不变量 + 蜕变关系的确定性扰动测试（`_shared/observable-acceptance.md`），作为该 Task 的 `**Verify**`
 
 ### Step 4: 写入 tasks.md（两档都产 —— run-track-a.sh 的输入）
 
@@ -78,8 +79,7 @@ cat $CHANGE_DIR/spec.md   # 完整读取，不截断
 **Description**:
 [完整的、自包含的任务描述，包含所有实现细节]
 
-**Verify**: `mvn compile -q` exit 0
-**Runtime Verify**: `curl -sf http://localhost:8080/health`（可选，需要运行时验证时填写）
+**Verify**: `mvn compile -q` exit 0  # user-facing 改动：此处须为「可观测验收」的确定性扰动测试（见 `_shared/observable-acceptance.md`），禁仅编译级；不可离线验证者改标 `UNVERIFIED-OBSERVABLE(<MR>)` 登记转 Phase 2、禁静默放行
 
 **Status**: PENDING
 
@@ -106,6 +106,7 @@ cat $CHANGE_DIR/spec.md   # 完整读取，不截断
 - Task 总数建议 8-20 个（太少=粒度太粗，太多=碎片化）
 - 不把测试单独拆为 Task（测试和实现在同一个 Task 里）
 - 无前置依赖的 Task 标记 `Depends: none`，允许并行执行
+- user-facing 改动：改动用户可观测输出的 Task，其 `**Verify**` 须为可观测验收的确定性扰动测试（`_shared/observable-acceptance.md`）；spec-ready（跳过 analyze）由 plan 据来料 spec+KB 自填不变量+MR，低置信→标 `UNVERIFIED-OBSERVABLE`+登记、不产错测试（不 stall），结构不可生成才 `PLAN_STATUS=BLOCKED|{原因}`。
 - 涉及以下场景的 Task 自动标记 `Gate: human`：
   - 数据库 Schema 变更
   - 认证/权限逻辑

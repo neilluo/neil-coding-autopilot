@@ -15,6 +15,7 @@ AI 全托管开发编排器。从需求到部署的全自动开发流水线。
 4. 验证：合并 / 部署前跑通验证命令（编译 / 测试 / 自检）。
 5. 知识沉淀（evolve）：把 CR 发现的规律与踩坑写回知识库。
 6. 状态可追溯：进度写入 `progress.md`（档位 A），或以 TodoWrite 为单一状态源（档位 B）——不靠记忆。
+7. 可观测验收：user-facing 改动（改变 UI/CLI/API/告警/报表等终端可观测输出）必带「可观测验收」——每个可观测值/态给出 SSOT + 不变量 + 蜕变关系（多源值含判别样例），其确定性扰动测试即该 Task 的 `**Verify**`；不可离线验证者须 `UNVERIFIED-OBSERVABLE` 醒目登记转 Phase 2、禁静默放行；结构缺失（无验收段且无可证伪免除）→ `BLOCKED|{原因}` 立即 exit、禁挂起。详见 `_shared/observable-acceptance.md`（headless 运行期拦截限可离线派生层；纯渲染/错 SSOT 交 Phase 2）。
 
 **HARD-GATE 约束的是"必须发生什么"（不变量），不是"用哪种机制"（见「执行档位」）。**
 </HARD-GATE>
