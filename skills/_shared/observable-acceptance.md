@@ -37,17 +37,17 @@
 - **覆盖/口径（非阻塞·自愈）**：MR 缺失/无判别力/口径泄漏/三态缺 → analyze=WARN 自修；运行期由 §「验证」的扰动测试在**既有 verify 门**直接拦（buggy 必挂 → 既有 fixer 循环自动修）。
 - **oracle 独立性**来自「不变量在实现前已冻结」：不变量/扰动轴/期望由 spec/tasks（设计期）固定；可执行测试文件因 controller write-gate 只能由 worker 落地。独立性靠"MR 先于实现冻结"，非靠"谁敲测试文件"。
 
-## 验证：蜕变测试即 `**Verify**`（不动脚本）
+## 验证：蜕变测试即 `**Verify**`（载重蹭现有 verify 门；另有 reviewer 维度）
 - plan 为 user-facing Task 写的 `**Verify**` 必须是上面的**确定性扰动测试**（`run-track-a.sh` 现成 `eval "$verify"` 执行 → 无人值守直接拦，无需改脚本）。**禁**仅编译级 Verify。
 - **多数"显示"bug 的计数/派生在后端、可离线被 MR 抓**（主战场）；只有**纯像素/DOM 渲染层**无离线宿主。
 
 ## 不可离线验证 & Phase 2（诚实边界，不 overclaim）
-- 无离线宿主的**纯渲染**值：Task 打 `UNVERIFIED-OBSERVABLE(<MR>)` + 登记 `clarifications.md` + 变更摘要醒目列出。**诚实说明**：脚本不识别该标记、loop 不读 clarifications，故 **headless 下仍 commit DONE**——**书面响亮登记、非运行期拦截**（靠 Phase 2/人读产物兜），但不 stall、不烧钱、不冒充"已验证"。
+- 无离线宿主的**纯渲染**值：Task 打 `UNVERIFIED-OBSERVABLE(<MR>)` + 登记 `clarifications.md` + 变更摘要醒目列出。**诚实说明**：脚本不识别该标记、loop 不读 clarifications；但 §「reviewer 维度」核验「标 UNVERIFIED 却非真无宿主」→ MAJOR→FAIL；真无宿主的纯渲染值仍**无法运行期执行**扰动测试，经 reviewer 正当化后 commit DONE（缺口从『静默 DONE』升级为『reviewer 拦截/正当化』，靠 Phase 2 观测兜），但不 stall、不烧钱、不冒充"已验证"。
 - **本门不保证**（设计门固有上限，交 Phase 2「观测/独立 QA 层」兜）：
-  - (a) novel 且 **SSOT 选错**：自洽错 MR 过全部结构门（reviewer 交叉核验默认关）。
+  - (a) novel 且 **SSOT 选错**：自洽错 MR 过全部结构门（reviewer 交叉核验现默认开，但自洽的错 SSOT 仍可能放行）。
   - (b) 纯渲染层无离线宿主：见上（headless 非运行期拦）。
   - (c) 多源**扰动轴不完备**：只扰无关源则假过（Q5 要求逐轴扰动压低，但无机检）。
-  - 附：确定性但**写错的 MR** 可能令正确实现翻 FAIL → fixer≤MAX_ROUNDS→exit2（有界假停线）；极少数下 fixer 亦可能改坏正确码去迎合错测试 → 静默提交坏码。靠"MR 设计期冻结 + Q5 逐轴 + §可选交叉核验"压低。
+  - 附：确定性但**写错的 MR** 可能令正确实现翻 FAIL → fixer≤MAX_ROUNDS→exit2（有界假停线）；极少数下 fixer 亦可能改坏正确码去迎合错测试 → 静默提交坏码。靠"MR 设计期冻结 + Q5 逐轴 + §reviewer 维度（默认开）"压低。
 - 定级：**让决策显式可执行 + 最大化拦截 + 缺口响亮可见**，非"必然堵死"。本文产物即 Phase 2 的输入契约。
 
 ## Worked example（通用示意，非项目专属）

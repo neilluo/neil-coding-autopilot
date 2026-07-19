@@ -82,6 +82,7 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$CHANGE_DIR" ] || { echo "ERROR: --change-dir is required (use --help)" >&2; exit 1; }
+CHANGE_DIR="$(cd "$CHANGE_DIR" 2>/dev/null && pwd -P || printf %s "$CHANGE_DIR")"  # absolute so review worker (cwd=$CWD) can read spec.md
 [ -n "$TASKS_FILE" ] || TASKS_FILE="$CHANGE_DIR/tasks.md"
 [ -f "$TASKS_FILE" ] || { echo "ERROR: tasks file not found: $TASKS_FILE" >&2; exit 1; }
 [ -d "$CWD" ] || { echo "ERROR: --cwd not a directory: $CWD" >&2; exit 1; }
@@ -219,7 +220,7 @@ build_fix_prompt() {
   } > "$out"
 }
 build_review_prompt() {
-  local files="$1" out="$2"
+  local files="$1" out="$2" n="${3:-}"
   {
     echo "你是一个代码审查专家，对本 Task 的代码变更做严格审查（Track A reviewer，经 dispatch.sh 调度）。"
     echo; echo "## 变更文件列表（请逐一读取完整内容再评审）"; echo
@@ -227,6 +228,9 @@ build_review_prompt() {
     echo; echo "## 审查维度"
     echo "- 通用：安全（注入/硬编码密钥）、逻辑正确性（空值/边界/资源泄漏/吞错）、健壮性（超时/兜底/失败日志）、可维护性。"
     echo "- 项目特定：读 AGENTS.md / autopilot/knowledge/SCHEMA.md / wiki/guides/*（存在才读），把其中强制规则当 Major 检查项。"
+    echo "- 可观测验收（本 Task 若改动用户可观测输出——UI/CLI/API/告警/报表）：读 $CHANGE_DIR/spec.md 的「可观测验收」段 + $SCRIPT_DIR/../skills/_shared/observable-acceptance.md，核验 ① 每个改动的可观测值/态有 SSOT + 判别性蜕变关系（多源值扰动非权威源期望不同）；② 下方本 Task 块的 Verify 为确定性扰动测试（非仅编译级）且期望可追溯到 spec 的 MR；③ 标 UNVERIFIED-OBSERVABLE 者须确为无离线宿主的纯渲染层、否则免除无效。缺失/对不上/免除滥用 → MAJOR。纯内部改动（无可观测变化）跳过本维度。"
+    echo; echo "## 本 Task 块（含 **Verify** 与可能的 UNVERIFIED-OBSERVABLE 标记，供 ②③ 交叉核验）"; echo
+    [ -n "$n" ] && task_block "$n"
     echo; echo "## 结论（回复末尾必须输出其一）"
     echo "REVIEW_PASS   # 无 CRITICAL/MAJOR"
     echo "REVIEW_FAIL   # 有 CRITICAL/MAJOR（并列出问题 + 文件:行号）"
@@ -291,7 +295,7 @@ run_task() {
     # review
     ( cd "$CWD" && git status --porcelain 2>/dev/null | cut -c4- ) > "$LOG_DIR/task-$n-files-$round.txt" || true
     [ -s "$LOG_DIR/task-$n-files-$round.txt" ] || echo "(no changed files detected)" > "$LOG_DIR/task-$n-files-$round.txt"
-    build_review_prompt "$LOG_DIR/task-$n-files-$round.txt" "$LOG_DIR/task-$n-review-$round-prompt.md"
+    build_review_prompt "$LOG_DIR/task-$n-files-$round.txt" "$LOG_DIR/task-$n-review-$round-prompt.md" "$n"
     log "  review (round $round) → dispatch($REVIEW_MODEL)"
     dispatch_worker "review" "$REVIEW_MODEL" "$LOG_DIR/task-$n-review-$round-prompt.md" \
       "审查上述变更文件（逐一读取），回复末尾输出 REVIEW_PASS 或 REVIEW_FAIL（有 CRITICAL/MAJOR 才 FAIL 并列问题）。" \
