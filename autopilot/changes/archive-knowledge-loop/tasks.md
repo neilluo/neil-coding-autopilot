@@ -9,7 +9,7 @@
 
 ## Task 1: 新增全局 KB 路径解析器 kb-path.sh + 冒烟测试（③升 基础）
 
-**Status**: PENDING
+**Status**: DONE
 
 **目标**: 建立"全局跨项目知识库"路径解析的**单一事实源**，供后续 evolve(写) / kb-search(读) 共用。
 
