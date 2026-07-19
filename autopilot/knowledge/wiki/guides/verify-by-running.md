@@ -1,8 +1,8 @@
 ---
-updated: 2026-07-18
+updated: 2026-07-19
 category: guides
 evidence: primary
-sources: [raw/20260711-dispatch-timeout-portability.md, raw/20260718-symlink-vs-copy-grounding.md]
+sources: [raw/20260711-dispatch-timeout-portability.md, raw/20260718-symlink-vs-copy-grounding.md, raw/20260719-pipefail-head-sigpipe-and-generated-file-tracking.md]
 ---
 
 # 指南：verify-by-running + shell 可移植性
@@ -22,7 +22,12 @@ sources: [raw/20260711-dispatch-timeout-portability.md, raw/20260718-symlink-vs-
 - 别假设 GNU 工具存在：`timeout`（mac 为 `gtimeout`，需 coreutils）、`flock`（stock macOS 无 → 降级 mkdir 原子锁）、`sed -i`（BSD 需 `-i ''` 或附着后缀）、`date`、`readlink -f`、`grep -P` 等行为不同或缺失。别假设 bash≥4（macOS 自带 3.2：无 `declare -A`/`mapfile`，用普通数组 + awk）。
 - 对外部命令依赖用 `command -v X || command -v Y || 降级` 探测；缺失时优雅降级 + WARN，而不是硬崩。
 
+## pipefail 管道 + 生成文件入库（本轮 archive-knowledge-loop CR 撞出）
+
+- **`set -o pipefail` + `| head`（或 `grep -q` 等早退命令）收尾 → SIGPIPE(141)**：命中数 > 截断行数时，`head` 提前关闭管道，上游写入被 `SIGPIPE` 打断，`pipefail` 把 141 当整管道退出码传播——静默破坏"fail-safe / 恒 exit 0"契约。修法：末段 `|| true` 兜底并注释成因。样板：`kb-search.sh` 的 `awk '!seen[$0]++' "$F" | head -n "$LIMIT" || true`（命中超 `--limit` 时不再假失败）。凡 pipefail 脚本用早退命令截断上游，都要 `|| true`。
+- **脚本生成的新文件必须显式 `git add`**：`git mv` / `git commit` 只认**已被跟踪**的文件；脚本新生成的产物（如 `archive-change.sh` 补的 `summary.md` 骨架）默认游离在工作区，`git mv`-only 流程会漏提交。调用链（finish / dogfood）在调完生成脚本后需 `git add -A`（本轮 commit `41af2ea` 才补上 track summary.md）。dogfood 时才现形，读代码看不出。
+
 ## 相关
 
-- 源自 `raw/20260711-dispatch-timeout-portability.md`、`raw/20260712-readme-dogfooding.md`、`raw/20260712-readme-review-table.md`、`raw/20260718-symlink-vs-copy-grounding.md`
+- 源自 `raw/20260711-dispatch-timeout-portability.md`、`raw/20260712-readme-dogfooding.md`、`raw/20260712-readme-review-table.md`、`raw/20260718-symlink-vs-copy-grounding.md`、`raw/20260719-pipefail-head-sigpipe-and-generated-file-tracking.md`
 - 约束见 `SCHEMA.md` C6 / C7 / C12

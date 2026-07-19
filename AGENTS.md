@@ -44,6 +44,7 @@ implement(worker-cli) → verify(编译) → review(reviewer-cli) → fix(worker
 | NEIL_AUTOPILOT_TELEMETRY | 1 | 设 0 全局关闭遥测（fail-safe 开关） |
 | NEIL_AUTOPILOT_KEEP_DAYS | 3 | runs/ 原始日志保留天数（metrics/reports 长期保留） |
 | NEIL_AUTOPILOT_LOG_SINK | file | telemetry 写入后端；云端保险/未来 OSS/SLS 扩展点，未识别值兜底回退 file |
+| NEIL_AUTOPILOT_KB_DIR | `$HOME/.neil-autopilot/knowledge` | 全局跨项目知识库路径（`scripts/kb-path.sh` 解析单一事实源，C14/C8）；evolve 升迁通用经验 / kb-search 检索历史命中共用 (source: raw/20260719-archive-knowledge-loop.md) |
 | AUTOPILOT_DAILY_MODEL | Ultimate | 每日 analysis agent 模型 |
 
 **统一调度约定**:
