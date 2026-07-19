@@ -9,6 +9,7 @@
 - [[track-a-launcher-pattern]] — 自主批处理用确定性脚本编排器（非 LLM 编排）
 - [[delegate-all-development]] — 控制器永不内联写码，开发一律托管子 agent
 - [[dogfood-freeze-and-stall-recovery]] — dogfood 冻结编排器 + qodercli worker stall 诊断/恢复 + 提交污染防线
+- [[cloud-deployment-readiness]] — autopilot 上云的接缝策略与延迟路线图（sink 已可插拔；scheduler/读侧/凭证/git 治理待做）
 
 ## Concepts（架构决策）
 
