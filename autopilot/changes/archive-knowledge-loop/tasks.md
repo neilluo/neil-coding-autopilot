@@ -114,7 +114,7 @@
 
 ## Task 6: SCHEMA 约束登记 + 全量回归冒烟（收口）
 
-**Status**: PENDING
+**Status**: DONE
 
 **目标**: 把本特性建立的两条不变量登记进知识库 SCHEMA，并确保没有破坏任何既有机制。
 

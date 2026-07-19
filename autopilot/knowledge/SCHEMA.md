@@ -24,6 +24,8 @@
 - **C10 自主批处理用确定性脚本编排**：Track A 用确定性 bash 编排器（`scripts/run-track-a.sh`）逐 Task 起 fresh worker，不用 LLM 当编排器（context-rot 搬家/非确定）；fail-closed。见 `wiki/guides/track-a-launcher-pattern.md`。
 - **C11 控制器永不内联写码**：两档的开发（implement/CR/fix）一律经 `run-track-a.sh` 托管 fresh qodercli worker；控制器只收摘要 + 状态行，不读源文件/不看 diff。交互档同样托管（"交互=内联"是伪命题）。见 `wiki/guides/delegate-all-development.md`。
 - **C12 自主提交需 .gitignore 兜底**：`run-track-a.sh` 的 `git add -A` 是自主提交（无控制器挑文件），依赖仓库有 `.gitignore` 屏蔽 scratch（`.DS_Store`/`*_opt.md`/日志）；否则 dogfooding 会撞出污染提交。见 `wiki/guides/verify-by-running.md`。
+- **C13 归档毕业不变量**：完成变更经 `scripts/archive-change.sh` 从 `changes/` `git mv` 进 `archive/`，一个变更在 archive **XOR** changes（绝不两处并存/皆无）；finish 硬门禁化，搬迁失败即 BLOCKED。
+- **C14 archive→knowledge 反哺闭环**：归档的内容必须被 evolve 蒸馏进知识库（本地 raw→wiki；跨项目通用者经 `kb-path.sh` 升迁全局 KB）；explore/analyze 开工经 `kb-search.sh` 检索本地+全局命中。Agent 读蒸馏层 + 检索器输出，不直接把原始 archive 塞进上下文。
 
 ## Design Principles
 
