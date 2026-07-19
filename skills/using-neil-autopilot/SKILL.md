@@ -89,11 +89,14 @@ autopilot/
 │       ├── progress.md           # 工作流状态（档位 A）
 │       └── explore-notes.md      # 澄清阶段的对话记录摘要
 │
-├── archive/                      # 已完成的历史变更
-│   └── YYYY-MM-DD-<feature>/     # 如 2026-07-06-video-distributor/
-│       ├── spec.md
-│       ├── tasks.md
-│       └── summary.md            # 完成摘要
+├── archive/                      # 已完成的历史变更（四层：YYYY/MM/MM-DD + 原扁平名叶子）
+│   └── YYYY/                     # 年，如 2026/
+│       └── MM/                   # 月，如 07/
+│           └── MM-DD/            # 月-日，如 07-06/
+│               └── YYYY-MM-DD-<feature>/  # 原扁平名叶子，如 2026-07-06-video-distributor/
+│                   ├── spec.md
+│                   ├── tasks.md
+│                   └── summary.md         # 完成摘要
 │
 ├── knowledge/                    # Karpathy LLM Wiki 三层知识库
 │   ├── SCHEMA.md                 # 维护规则 + 项目元数据（≤200行）

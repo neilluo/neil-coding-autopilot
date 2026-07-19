@@ -72,7 +72,7 @@
 
 ## Task 3: 同步文档 + SCHEMA 到四层结构
 
-**Status**: PENDING
+**Status**: DONE
 
 **目标**: 把仓库内所有把 archive 描述为**当前**扁平 `YYYY-MM-DD-<feature>` 的文档/规则更新为四层，
 避免文档与实现漂移。
