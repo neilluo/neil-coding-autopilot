@@ -1,0 +1,29 @@
+## 审查结论
+
+**① SSOT + 判别性 MR 核验**
+`card_model_count` 的实现直接读取 `state["tpm_by_model"]`（本分钟"有实测数据"的模型），但 spec 明确 SSOT = **配置**（`model_tpm_thresholds` 的模型集合），不变量为「显示模型数 = |配置模型集|，与实测数据无关」。当前实现恰好是 spec.md §1 开篇描述的那个原始 bug 本身（"数 `tpm_by_model` 的 key" = 实现口径当期望）。这不是审查遗漏，是**功能直接违反 SSOT**：配 2 个模型、当分钟只 1 个模型有数据时，该函数会返回 1，而不是不变量要求的 2。
+→ **web/card.py:10**（`return len(state["tpm_by_model"])`）
+
+**② Verify 是否为确定性扰动测试（蜕变关系）**
+Task 给出的 Verify：
+```
+python3 -c "assert card_model_count({'tpm_by_model':{'m1':5}})==1"
+```
+这是**点 oracle**，不是蜕变测试。它没有"固定配置=2、扰动实测(2 个有数据→1 个→0 个)、断言显示恒=2"的判别性扰动，而是直接把 buggy 实现的输出（1）当作期望值断言，恰是 observable-acceptance.md worked example 里描述的"buggy 也能通过"的反面教材。该 Verify **无法区分**正确实现（应恒=2，因为示例里没给配置字段/给的配置隐含缺失）与当前 buggy 实现，判别力为零。
+→ 违反 observable-acceptance.md §"判别力（硬要求）"与 spec.md §3.3"禁仅编译级/须扰动测试"精神。
+
+**③ UNVERIFIED-OBSERVABLE 免除滥用检查**
+Task 未标 UNVERIFIED-OBSERVABLE，且该计数逻辑在后端 Python 可离线派生测试（spec 已明确说明"不应标 UNVERIFIED-OBSERVABLE"），故此项不适用免除——**必须**有可离线扰动测试，而当前没有。
+
+**项目规则核验（SCHEMA.md）**
+SCHEMA.md 第 46 行强制规则：「展示口径配置驱动…集合来自配置…+观测并集…**别用纯观测数据驱动展示（会漏配置模型、随流量抖动）**」。当前实现正是"纯观测数据驱动展示"，直接违反该 Major 强制规则。
+
+**次要（健壮性）**
+`state["tpm_by_model"]` 用 `[]` 硬取，缺 key 时抛 `KeyError` 无兜底；且函数未读取/使用配置模型集合，说明入参 `state` 本身可能就缺少 SSOT 所需字段（配置模型列表），这是设计层面的缺口，不只是实现笔误。
+
+## 问题清单
+1. **CRITICAL** — `web/card.py:10`：`card_model_count` 用实测数据（`tpm_by_model`）而非配置（`model_tpm_thresholds` 模型集）计数，直接违反 spec 不变量与 SCHEMA.md:46 强制规则，是本 gate 要拦截的原始 bug 复现。
+2. **MAJOR** — Verify 命令（Task 块第 30 行）为点 oracle、非蜕变测试，未覆盖"固定配置、扰动实测 2→1→0，断言恒=2"的判别性样例，无法抓出上述 bug，反而会让 buggy 实现通过。
+3. **MAJOR**（可维护性/健壮性）— `web/card.py:9-11`：未见 `state` 中配置模型集合的读取路径，函数签名/输入契约与 spec SSOT 不匹配；`state["tpm_by_model"]` 无边界防护。
+
+REVIEW_FAIL
