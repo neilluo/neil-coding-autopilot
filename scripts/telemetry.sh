@@ -15,6 +15,18 @@
 #   - all variable references use ${VAR:-} so `set -u` callers survive sourcing.
 #
 # PORTABILITY: bash 3.2 (macOS stock) — no associative arrays, no mapfile.
+#
+# SINK SEAM (spec.md §3.3 — cloud-migration insurance, extension point only):
+#   telemetry_emit routes through _telemetry_sink_dispatch, which picks a
+#   backend function by name: `${NEIL_AUTOPILOT_LOG_SINK:-file}` -> function
+#   `_telemetry_sink_<name>`. To add a backend (e.g. oss/sls), just define
+#   `_telemetry_sink_<name>() { ... }` below (same fail-safe contract as
+#   `_telemetry_sink_file`) and set NEIL_AUTOPILOT_LOG_SINK=<name> — the
+#   dispatcher discovers it by name, no dispatcher changes needed. Unknown
+#   sink names fall back to `file` (fail-safe: never silently drop events).
+#   No `stdout` sink is added here: stdout is the worker's output channel
+#   (see FAIL-SAFE CONTRACT above) and a stdout sink would break that
+#   contract; cloud stdout collection is a future, separately designed sink.
 
 # ── telemetry_enabled: env switch (NEIL_AUTOPILOT_TELEMETRY=0 disables) ─────
 telemetry_enabled() {
@@ -76,18 +88,43 @@ telemetry_json_escape() {
   return 0
 }
 
-# ── telemetry_emit <json>: append one line to today's runs/*.jsonl ──────────
+# ── telemetry_emit <json>: route one JSON line to the active sink ──────────
 telemetry_emit() {
   local json="${1:-}"
   {
     if telemetry_enabled && [ -n "$json" ]; then
-      local root=""
-      root="$(telemetry_log_root)"
-      if [ -n "$root" ]; then
-        printf '%s\n' "$json" >> "$root/runs/$(date +%F).jsonl"
-      fi
+      _telemetry_sink_dispatch "$json"
     fi
   } 2>/dev/null || true
+  return 0
+}
+
+# ── internal: true if $1 names a currently-defined shell function ──────────
+_telemetry_is_function() {
+  [ "$(type -t "${1:-}" 2>/dev/null)" = "function" ]
+}
+
+# ── internal: pick backend by ${NEIL_AUTOPILOT_LOG_SINK:-file}, never eval ──
+# Unknown/undefined sink names fall back to _telemetry_sink_file (fail-safe:
+# a typo in the env var must never silently drop events).
+_telemetry_sink_dispatch() {
+  local json="${1:-}" sink="${NEIL_AUTOPILOT_LOG_SINK:-file}" fn=""
+  fn="_telemetry_sink_${sink}"
+  if _telemetry_is_function "$fn"; then
+    "$fn" "$json"
+  else
+    _telemetry_sink_file "$json"
+  fi
+  return 0
+}
+
+# ── default backend: append one line to today's runs/*.jsonl ───────────────
+_telemetry_sink_file() {
+  local json="${1:-}" root=""
+  root="$(telemetry_log_root)"
+  if [ -n "$root" ]; then
+    printf '%s\n' "$json" >> "$root/runs/$(date +%F).jsonl"
+  fi
   return 0
 }
 

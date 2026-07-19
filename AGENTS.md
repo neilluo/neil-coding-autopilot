@@ -43,6 +43,7 @@ implement(worker-cli) → verify(编译) → review(reviewer-cli) → fix(worker
 | NEIL_AUTOPILOT_LOG_DIR | `$HOME/neil-autopilot-logs-analysis` | 遥测日志根（落在业务 CWD 内自动降级到 $TMPDIR） |
 | NEIL_AUTOPILOT_TELEMETRY | 1 | 设 0 全局关闭遥测（fail-safe 开关） |
 | NEIL_AUTOPILOT_KEEP_DAYS | 3 | runs/ 原始日志保留天数（metrics/reports 长期保留） |
+| NEIL_AUTOPILOT_LOG_SINK | file | telemetry 写入后端；云端保险/未来 OSS/SLS 扩展点，未识别值兜底回退 file |
 | AUTOPILOT_DAILY_MODEL | Ultimate | 每日 analysis agent 模型 |
 
 **统一调度约定**:

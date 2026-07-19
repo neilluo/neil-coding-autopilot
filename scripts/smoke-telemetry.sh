@@ -10,6 +10,11 @@
 #   3. NEIL_AUTOPILOT_TELEMETRY=0 results in zero disk writes.
 #   4. telemetry_emit never writes to stdout (parse-status.sh reads stdout —
 #      pollution there is a correctness bug, not a cosmetic one).
+#   5. NEIL_AUTOPILOT_LOG_SINK=<name> routes telemetry_emit to a
+#      caller-defined `_telemetry_sink_<name>` function instead of the file
+#      backend (the pluggable sink seam, spec.md §3.2-3.3).
+#   6. An unrecognized NEIL_AUTOPILOT_LOG_SINK value falls back to the file
+#      backend (fail-safe) and stdout stays clean.
 #
 # Usage: bash scripts/smoke-telemetry.sh   # 0 = all pass, 1 = failure.
 set -uo pipefail
@@ -148,6 +153,58 @@ run_stdout_scenario() {
   fi
 }
 run_stdout_scenario
+
+# ── scenario 5: custom sink seam is pluggable via NEIL_AUTOPILOT_LOG_SINK ───
+run_custom_sink_scenario() {
+  local root="$WORK/s5"
+  mkdir -p "$root"
+  (
+    NEIL_AUTOPILOT_LOG_DIR="$root"
+    export NEIL_AUTOPILOT_LOG_DIR
+    . "$TELEMETRY"
+    _telemetry_sink_capture() { printf '%s\n' "${1:-}" >> "$root/captured"; }
+    NEIL_AUTOPILOT_LOG_SINK=capture
+    export NEIL_AUTOPILOT_LOG_SINK
+    telemetry_emit_run "run-1" "smoke-change" "complete" 5
+  )
+
+  local jsonl="$root/runs/$(date +%F).jsonl"
+  if [ ! -f "$root/captured" ]; then
+    fail "custom sink scenario: $root/captured not created"
+  elif [ -e "$jsonl" ]; then
+    fail "custom sink scenario: $jsonl was created (should have gone to custom sink only)"
+  elif ! grep -q '"event":"run"' "$root/captured"; then
+    fail "custom sink scenario: captured file missing expected event line"
+  else
+    pass "custom sink scenario: custom _telemetry_sink_capture received the line, file sink untouched"
+  fi
+}
+run_custom_sink_scenario
+
+# ── scenario 6: unknown sink falls back to file, stdout stays clean ────────
+run_unknown_sink_scenario() {
+  local root="$WORK/s6" out=""
+  mkdir -p "$root"
+  out="$(
+    NEIL_AUTOPILOT_LOG_DIR="$root"
+    NEIL_AUTOPILOT_LOG_SINK=bogus
+    export NEIL_AUTOPILOT_LOG_DIR NEIL_AUTOPILOT_LOG_SINK
+    . "$TELEMETRY"
+    telemetry_emit_run "run-1" "smoke-change" "complete" 5
+  )"
+
+  local jsonl="$root/runs/$(date +%F).jsonl"
+  if [ -n "$out" ]; then
+    fail "unknown sink scenario: stdout leaked: '$out'"
+  elif [ ! -f "$jsonl" ]; then
+    fail "unknown sink scenario: $jsonl not created (fallback to file did not happen)"
+  elif ! jq -e . < "$jsonl" >/dev/null 2>&1; then
+    fail "unknown sink scenario: $jsonl is not valid JSON"
+  else
+    pass "unknown sink scenario: unknown sink fell back to file, stdout clean"
+  fi
+}
+run_unknown_sink_scenario
 
 if [ "$FAILED" = 0 ]; then
   echo "SMOKE: ALL PASS"

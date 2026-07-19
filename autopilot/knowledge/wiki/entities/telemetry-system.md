@@ -6,7 +6,7 @@
 
 | 脚本 | 职责 |
 |------|------|
-| `scripts/telemetry.sh` | 可 source 的 **fail-safe** 遥测库：`telemetry_log_root`（`NEIL_AUTOPILOT_LOG_DIR`→`$HOME/...`，$CWD 内降级 TMPDIR）、`telemetry_json_escape`（纯 bash，反斜杠先转）、`telemetry_emit`（只写文件、绝不污染 stdout）、`telemetry_rotate`（`.jsonl` `-delete` + 非空目录 `-exec rm -rf`）。写侧零依赖。 |
+| `scripts/telemetry.sh` | 可 source 的 **fail-safe** 遥测库：`telemetry_log_root`（`NEIL_AUTOPILOT_LOG_DIR`→`$HOME/...`，$CWD 内降级 TMPDIR）、`telemetry_json_escape`（纯 bash，反斜杠先转）、`telemetry_emit`（路由到可插拔 sink、绝不污染 stdout）、`telemetry_rotate`（`.jsonl` `-delete` + 非空目录 `-exec rm -rf`）。写侧零依赖。 |
 | `scripts/dispatch.sh`（埋点） | 每 worker emit `dispatch` 事件（stage/model/duration/exit_code）；修了 set-e 幸存者偏差（`wait \|\| EXIT_CODE=$?`）。 |
 | `scripts/run-track-a.sh`（埋点） | emit `round`/`task`/`run` 事件；3 处 `exit 2` 前就地 emit BLOCKED task 事件 + 独立 EXIT trap emit run 事件。 |
 | `scripts/daily-analysis.sh` | 确定性编排（硬依赖 jq）：rotate → jq 聚合 `runs/*.jsonl`→`metrics/<date>.json` → 当日有新数据才 dispatch 1 个 analysis agent 写 `reports/<date>.md`（分类回填走 if 包裹的 jq slurpfile 合并）。 |
@@ -24,6 +24,12 @@
 - **fail-safe 铁律**：遥测任何失败都不影响真实开发流程的 stdout/退出码；`NEIL_AUTOPILOT_TELEMETRY=0` 一键关。
 - **自进化 = 纯建议 + 人工批**：每日报告只产出建议（针对**插件自身角色 prompt**：`run-track-a.sh` 的 `build_impl/fix/review_prompt`；`*-prompt.md` 是运行时不加载的文档模板），**不自动改**、不碰业务项目 AGENTS.md、不动既有 evolve per-run 行为。
 - **路径 C8**：不硬编码用户名，经 `NEIL_AUTOPILOT_LOG_DIR` env（install 固化进 plist + profile export，保证交互与 launchd 两条路径同目录）。
+
+## Sink 可插拔 seam（change: telemetry-pluggable-sink，云端保险）
+
+`telemetry_emit` 的唯一写入点已改为路由式：`telemetry_emit` → `_telemetry_sink_dispatch`（按 `${NEIL_AUTOPILOT_LOG_SINK:-file}` 组函数名 `_telemetry_sink_<name>`，`_telemetry_is_function` 判存在，**绝不 eval**）→ 命中则调用该函数，未命中兜底回退 `_telemetry_sink_file`（现有本地文件逻辑原样抽出）。加新后端只需按约定命名新增一个 `_telemetry_sink_<name>()` 函数（同 fail-safe 契约），分发器代码零改动。
+
+**Out of scope（本次显式不做，写侧 only）**：真实云后端（`oss`/`sls` 等）实现、调度器上云（launchd/cron→CronJob/函数定时）、`daily-analysis.sh` 读侧适配、`run-track-a.sh` 完整输出复制路径、云端凭证/git 身份/时区治理——均延迟到真正上云部署时的后续变更。**不新增 `stdout` sink**：stdout 是 worker 输出通道（被 parse-status.sh 解析），加 stdout sink 会破坏该契约。`telemetry_rotate` 仍只对 `file` 后端生效，云后端留存交由其自身机制（bucket 生命周期 / 日志服务 TTL）。
 
 ## 运维
 

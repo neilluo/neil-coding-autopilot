@@ -308,6 +308,7 @@ autopilot/
 | `NEIL_AUTOPILOT_LOG_DIR` | `$HOME/neil-autopilot-logs-analysis` | 遥测日志根目录；若落在被开发项目 `$CWD` 内会自动降级到 `$TMPDIR`，避免被 `git add -A` 卷入业务提交 |
 | `NEIL_AUTOPILOT_TELEMETRY` | `1` | 设为 `0` 全局关闭遥测（fail-safe 开关，关闭后零落盘） |
 | `NEIL_AUTOPILOT_KEEP_DAYS` | `3` | `runs/` 原始日志保留天数（`metrics/`、`reports/` 不受此影响，长期保留） |
+| `NEIL_AUTOPILOT_LOG_SINK` | `file` | 选择 `telemetry.sh` 写入后端；默认写本地文件，是云端保险/未来接入 OSS/SLS 等云后端的扩展点（未识别值兜底回退到 `file`） |
 | `AUTOPILOT_DAILY_MODEL` | `Ultimate` | 每日 analysis agent 使用的模型 |
 
 ### 安装每日定时分析
