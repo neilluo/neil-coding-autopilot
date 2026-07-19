@@ -34,7 +34,7 @@
 
 ## Task 2: 新增确定性归档脚本 archive-change.sh + 冒烟，并接入 finish（①挪）
 
-**Status**: PENDING
+**Status**: DONE
 
 **目标**: 修复"归档只 cp 不 mv、原件永不清理"的根因缺陷，落成确定性、幂等、fail-closed 的搬迁脚本，并让 finish 硬门禁化调用它。
 

@@ -93,32 +93,39 @@ git push origin "$BASE"
 gh run list --limit 1
 ```
 
-### Step 6: 归档变更产物
+### Step 6: 归档变更产物（硬门禁：确定性搬迁，XOR 不变量）
 
-将本次变更的产物归档到 archive 目录：
+调用 `scripts/archive-change.sh` 把 `$CHANGE_DIR` **搬迁**（非复制）进 archive；脚本自身幂等 + fail-closed（见 Task 2 spec）。
+
+**不变量**：完成后该变更在 `archive` **XOR** `changes` 中，绝不两处并存（原 `cp` 手法只复制不清理、导致两处并存，是本步要修复的根因缺陷）。
+
+脚本自身用相对 `scripts/` 不可靠（本 skill 运行在业务项目 CWD 下，`scripts/` 会解析到业务项目、不存在）；按 `_shared/conventions.md`「dispatch.sh 路径解析」同款范式解析出绝对路径：
 
 ```bash
-DATE=$(date +%Y-%m-%d)
-FEATURE_NAME=<current-feature-name>
+export SKILL_BASE_DIR="<注入的 Base directory for this skill 绝对路径>"
+resolve_script() {
+  local name="$1"
+  local base="${SKILL_BASE_DIR:-}" root="${SKILL_BASE_DIR:-}"; root="${root%/skills/*}"
+  [ -n "${base}" ] && [ -f "${root}/scripts/${name}" ] && { printf '%s\n' "${root}/scripts/${name}"; return 0; }
+  local cand="${HOME}/.qoder/skills/neil-coding-autopilot/scripts/${name}"
+  [ -f "${cand}" ] && { printf '%s\n' "${cand}"; return 0; }
+  echo "ERROR: ${name} not found — cannot archive" >&2; return 1
+}
+ARCHIVE_CHANGE="$(resolve_script archive-change.sh)" || { echo "FINISH_STATUS=BLOCKED: 定位不到 archive-change.sh"; exit 1; }
 
-# 创建归档目录
-mkdir -p $ARCHIVE_DIR/${DATE}-${FEATURE_NAME}
+if ! "$ARCHIVE_CHANGE" --change-dir "$CHANGE_DIR"; then
+  echo "FINISH_STATUS=BLOCKED: archive-change.sh 调用失败"
+  exit 1
+fi
 
-# 复制产物到归档（保留原件直到 evolve 完成后再清理）
-cp $CHANGE_DIR/spec.md $ARCHIVE_DIR/${DATE}-${FEATURE_NAME}/
-cp $CHANGE_DIR/tasks.md $ARCHIVE_DIR/${DATE}-${FEATURE_NAME}/
-cp $CHANGE_DIR/explore-notes.md $ARCHIVE_DIR/${DATE}-${FEATURE_NAME}/ 2>/dev/null || true
-
-# 生成完成摘要
-cat > $ARCHIVE_DIR/${DATE}-${FEATURE_NAME}/summary.md << EOF
-# ${FEATURE_NAME} - 完成摘要
-
-- 完成时间: ${DATE}
-- Task 数: [N]
-- PR/合并: [PR URL 或 commit hash]
-- 关键决策: [从 explore-notes 提取]
-EOF
+# 双保险：脚本自身已 fail-closed 校验源目录已消失；此处再核验一次
+if [ -d "$CHANGE_DIR" ]; then
+  echo "FINISH_STATUS=BLOCKED: 归档后 \$CHANGE_DIR 仍存在（XOR 不变量被破坏）"
+  exit 1
+fi
 ```
+
+脚本内部已承担「生成 summary.md 骨架（若缺）」的语义，无需在 SKILL 中重复生成。
 
 ### Step 6.5: 移除运行期哨兵
 
