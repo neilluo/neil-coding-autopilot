@@ -141,6 +141,10 @@ if [ -n "$REPO_ROOT" ]; then
   fi
 fi
 if [ "$MOVED" -eq 0 ]; then
+  if [ -e "$TARGET" ]; then
+    echo "ERROR: archive-change.sh: git mv failed and TARGET already exists, refusing to nest: $TARGET" >&2
+    exit 1
+  fi
   mv "$CHANGE_DIR_ABS" "$TARGET"
 fi
 
@@ -149,5 +153,8 @@ if [ -d "$CHANGE_DIR_ABS" ]; then
   echo "ERROR: archive-change.sh: move failed — source still exists: $CHANGE_DIR_ABS (XOR invariant violated)" >&2
   exit 1
 fi
+
+# ── stage newly-generated files (e.g. summary.md) that git mv left untracked ─
+[ -n "$REPO_ROOT" ] && ( cd "$REPO_ROOT" && git add "$TARGET" ) >/dev/null 2>&1 || true
 
 printf '%s\n' "$TARGET"

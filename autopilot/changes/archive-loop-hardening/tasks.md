@@ -7,7 +7,7 @@
 
 ## Task 1: 加固 archive-change.sh（#1 summary 入库 + #3 mv 守卫）+ 扩展冒烟
 
-**Status**: PENDING
+**Status**: DONE
 
 **目标**: 修复 `scripts/archive-change.sh` 的 #1（生成文件漏入库）与 #3（mv 降级嵌套），并扩展 `scripts/smoke-archive-change.sh` 加判别性断言。
 
