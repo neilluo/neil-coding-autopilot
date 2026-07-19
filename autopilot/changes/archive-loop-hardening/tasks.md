@@ -27,7 +27,7 @@
 
 ## Task 2: 修 evolve 全局升迁兜底（#2 真跳过）+ 全量回归
 
-**Status**: PENDING
+**Status**: DONE
 
 **目标**: 修复 `skills/autopilot-evolve/SKILL.md` 全局升迁片段的兜底逻辑，使 `kb-path.sh` 定位失败时**真正跳过**，绝不以空 `$KB_PATH` 继续执行；并确认全套机制无回归。
 

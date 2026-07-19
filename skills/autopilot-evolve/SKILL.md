@@ -122,11 +122,17 @@ resolve_script() {
   [ -f "${cand}" ] && { printf '%s\n' "${cand}"; return 0; }
   echo "ERROR: ${name} not found" >&2; return 1
 }
-KB_PATH="$(resolve_script kb-path.sh)" || { echo "跳过全局升迁：定位不到 kb-path.sh"; }
-GLOBAL_KB="$("$KB_PATH" --ensure)"
+KB_PATH="$(resolve_script kb-path.sh)"
+if [ -n "$KB_PATH" ]; then
+  GLOBAL_KB="$("$KB_PATH" --ensure)"
+else
+  echo "跳过全局升迁：定位不到 kb-path.sh"
+fi
 ```
 
-将通用经验以同样的 frontmatter 格式（`source: evolve/completed-change` 等，`evidence` 与本地一致）写入 `$GLOBAL_KB/raw/{YYYYMMDD}-{slug}.md`。
+若 `$KB_PATH` 定位失败（上面已 echo 跳过提示），**真正跳过整个 Step 3.5**：不得以空 `$KB_PATH` 进入 `--ensure`，也不得让 `$GLOBAL_KB` 为空继续执行后续写入。
+
+仅当 `$GLOBAL_KB` 成功解析时，才将通用经验以同样的 frontmatter 格式（`source: evolve/completed-change` 等，`evidence` 与本地一致）写入 `$GLOBAL_KB/raw/{YYYYMMDD}-{slug}.md`。
 
 **沿用现有回写门禁**：
 - 必须溯源到本地已写入的 raw 文件 — **无源不写**
