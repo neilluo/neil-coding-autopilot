@@ -10,7 +10,7 @@
 - [[delegate-all-development]] — 控制器永不内联写码，开发一律托管子 agent
 - [[dogfood-freeze-and-stall-recovery]] — dogfood 冻结编排器 + qodercli worker stall 诊断/恢复 + 提交污染防线
 - [[cloud-deployment-readiness]] — autopilot 上云的接缝策略与延迟路线图（sink 已可插拔；scheduler/读侧/凭证/git 治理待做）
-- [[archive-knowledge-loop]] — changes→archive→knowledge 反哺闭环（①挪 ②嚼 ③升 ④翻）；归档变"喂未来开发的活知识"，跨项目复利
+- [[archive-knowledge-loop]] — changes→archive→knowledge 反哺闭环（①挪 ②嚼 ③升 ④翻）+ 归档规模化（四层 YYYY/MM/MM-DD 分层 + 幂等迁移三件套 + dedup 前置超集证明）；归档变"喂未来开发的活知识"，跨项目复利
 
 ## Concepts（架构决策）
 - [[observable-acceptance-gate]] — 可观测验收门：验收=不变量+蜕变关系（治 test oracle problem）；扰动测试蹭 verify 门；headless reviewer 上牙；纯渲染/错 SSOT 转 Phase 2

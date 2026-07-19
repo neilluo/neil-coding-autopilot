@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # archive-change.sh — deterministic, idempotent, fail-closed migration of a
 # completed autopilot change from autopilot/changes/<name> to
-# autopilot/archive/<DATE>-<name> (SCHEMA C7/C8).
+# autopilot/archive/<YYYY>/<MM>/<MM-DD>/<DATE>-<name> (SCHEMA C7/C8).
 #
 # Usage:
 #   archive-change.sh --change-dir DIR [--archive-dir DIR] [--date YYYY-MM-DD]
@@ -13,10 +13,10 @@
 #   --date defaults to `date +%Y-%m-%d`.
 #
 # Behavior:
-#   - Idempotent: if <archive-dir>/<DATE>-<name> already exists, print its
-#     path and exit 0 (no re-move, no error) — checked BEFORE the
-#     --change-dir existence check, so re-running the exact same command
-#     after a successful move (source now gone) still exits 0.
+#   - Idempotent: if <archive-dir>/<YYYY>/<MM>/<MM-DD>/<DATE>-<name> already
+#     exists, print its path and exit 0 (no re-move, no error) — checked
+#     BEFORE the --change-dir existence check, so re-running the exact same
+#     command after a successful move (source now gone) still exits 0.
 #   - Move: prefer `git mv` when change-dir is inside a git repo; fall back
 #     to `mv` for non-git repos or if `git mv` fails.
 #   - If change-dir lacks summary.md, a skeleton is generated before moving.
@@ -104,7 +104,13 @@ if [ -z "$DATE_STR" ]; then
   DATE_STR="$(date +%Y-%m-%d)"
 fi
 
-TARGET="$ARCHIVE_DIR/${DATE_STR}-${CHANGE_NAME}"
+_Y="${DATE_STR%%-*}"      # YYYY
+_R="${DATE_STR#*-}"       # MM-DD
+_M="${_R%%-*}"            # MM
+_D="${_R#*-}"             # DD
+_MMDD="${_M}-${_D}"       # MM-DD
+
+TARGET="$ARCHIVE_DIR/${_Y}/${_M}/${_MMDD}/${DATE_STR}-${CHANGE_NAME}"
 
 # ── idempotent: already archived (checked before existence of change-dir) ──
 if [ -d "$TARGET" ]; then
@@ -130,7 +136,7 @@ if [ ! -f "$CHANGE_DIR_ABS/summary.md" ]; then
 EOF
 fi
 
-mkdir -p "$ARCHIVE_DIR"
+mkdir -p "$(dirname "$TARGET")"
 
 # ── move: prefer git mv inside a git repo, fall back to mv ─────────────────
 MOVED=0

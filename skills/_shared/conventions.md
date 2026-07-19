@@ -37,7 +37,7 @@
 | $CHANGE_DIR | 当前变更目录 | autopilot/changes/video-distributor |
 | $KNOWLEDGE_DIR | 知识库目录 | autopilot/knowledge |
 | $HOOKS_DIR | 质量门禁目录 | autopilot/hooks |
-| $ARCHIVE_DIR | 归档目录 | autopilot/archive |
+| $ARCHIVE_DIR | 归档目录 | autopilot/archive（叶子按 `YYYY/MM/MM-DD/` 三层组织，根目录不变） |
 
 ## 分支纪律（两档通用）
 

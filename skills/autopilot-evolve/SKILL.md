@@ -46,7 +46,7 @@ evolve 的核心流程：**先写 raw（不可变证据），再编译到 wiki�
 2. **编译失败** — 重复出现的编译错误模式
 3. **Task BLOCKED** — 阻塞原因和解决方式
 4. **新增模块** — 代码架构变更
-5. **完成变更** — 读取本轮 `$CHANGE_DIR`（若已被 `autopilot-finish` 搬迁，则读 `autopilot/archive/` 下对应日期目录）的 `spec.md`/`tasks.md`/`explore-notes.md`，提炼：本次做了什么、关键决策与被否决的替代方案（决策溯源）、可复用的模式/坑点
+5. **完成变更** — 读取本轮 `$CHANGE_DIR`（若已被 `autopilot-finish` 搬迁，则读四层归档路径 `autopilot/archive/YYYY/MM/MM-DD/YYYY-MM-DD-<name>/`）的 `spec.md`/`tasks.md`/`explore-notes.md`，提炼：本次做了什么、关键决策与被否决的替代方案（决策溯源）、可复用的模式/坑点
 
 ### Step 2: 写入 raw/（不可变源）
 
