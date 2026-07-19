@@ -12,6 +12,7 @@
 - [[cloud-deployment-readiness]] — autopilot 上云的接缝策略与延迟路线图（sink 已可插拔；scheduler/读侧/凭证/git 治理待做）
 
 ## Concepts（架构决策）
+- [[observable-acceptance-gate]] — 可观测验收门：验收=不变量+蜕变关系（治 test oracle problem）；扰动测试蹭 verify 门；headless reviewer 上牙；纯渲染/错 SSOT 转 Phase 2
 
 ## Entities（模块 / 组件）
 - [[run-autopilot]] — Track A 端到端编排器（loop→finish→evolve），fail-closed
