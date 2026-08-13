@@ -59,7 +59,7 @@ exit 0
 
 ## Task 2: telemetry 扩展（token 字段 + 默认值调整）
 
-**Status**: PENDING
+**Status**: DONE
 
 落地 spec D7/D11/D13。改 `scripts/telemetry.sh`：
 

@@ -43,11 +43,19 @@ _telemetry_int() {
   return 0
 }
 
+_telemetry_num() {
+  local v="${1:-}"
+  if printf '%s\n' "$v" | LC_ALL=C grep -Eq '^-?(0|[1-9][0-9]*)([.][0-9]+)?([eE][+-]?[0-9]+)?$'; then
+    printf '%s' "$v"
+  fi
+  return 0
+}
+
 # ── telemetry_log_root: resolve $LOG_ROOT, apply CWD safety guard, grow dirs ─
 # Echoes the resolved root, or empty string if unusable. Always returns 0.
 telemetry_log_root() {
   local root="" cwd=""
-  root="${NEIL_AUTOPILOT_LOG_DIR:-${HOME:-}/neil-autopilot-logs-analysis}"
+  root="${NEIL_AUTOPILOT_LOG_DIR:-${HOME:-}/Library/Logs/neil-autopilot}"
   if [ -z "$root" ]; then
     echo ""
     return 0
@@ -128,12 +136,12 @@ _telemetry_sink_file() {
   return 0
 }
 
-# ── telemetry_rotate [days]: delete runs/ older than `days` (default 3) ─────
+# ── telemetry_rotate [days]: delete runs/ older than `days` (default 30) ────
 # `-delete` cannot remove non-empty directories, hence the separate -exec rm -rf.
 telemetry_rotate() {
-  local days="${1:-${NEIL_AUTOPILOT_KEEP_DAYS:-3}}"
+  local days="${1:-${NEIL_AUTOPILOT_KEEP_DAYS:-30}}"
   case "$days" in
-    ''|*[!0-9]*) days=3 ;;
+    ''|*[!0-9]*) days=30 ;;
   esac
   local root=""
   root="$(telemetry_log_root)"
@@ -157,7 +165,7 @@ telemetry_rotate() {
 telemetry_emit_dispatch() {
   local exit_code="${1:-0}" start_ts="${2:-}"
   {
-    local now="" dur=0 stage="" run_id="" model="" json=""
+    local now="" dur=0 stage="" run_id="" model="" json="" value=""
     now="$(date +%s)"
     if [ -n "$start_ts" ]; then
       dur=$((now - start_ts))
@@ -167,13 +175,55 @@ telemetry_emit_dispatch() {
     model="${MODEL:-}"
     exit_code="$(_telemetry_int "$exit_code")"
     dur="$(_telemetry_int "$dur")"
-    json=$(printf '{"ts":"%s","run_id":"%s","event":"dispatch","stage":"%s","model":"%s","duration_s":%s,"exit_code":%s}' \
+    json=$(printf '{"ts":"%s","run_id":"%s","event":"dispatch","stage":"%s","model":"%s","duration_s":%s,"exit_code":%s' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       "$(telemetry_json_escape "$run_id")" \
       "$(telemetry_json_escape "$stage")" \
       "$(telemetry_json_escape "$model")" \
       "$dur" "$exit_code")
-    telemetry_emit "$json"
+    if [ -n "${AUTOPILOT_TM_INPUT_TOKENS:-}" ]; then
+      value="$(_telemetry_int "$AUTOPILOT_TM_INPUT_TOKENS")"
+      json="$json,\"input_tokens\":$value"
+    fi
+    if [ -n "${AUTOPILOT_TM_OUTPUT_TOKENS:-}" ]; then
+      value="$(_telemetry_int "$AUTOPILOT_TM_OUTPUT_TOKENS")"
+      json="$json,\"output_tokens\":$value"
+    fi
+    if [ -n "${AUTOPILOT_TM_CACHE_READ_TOKENS:-}" ]; then
+      value="$(_telemetry_int "$AUTOPILOT_TM_CACHE_READ_TOKENS")"
+      json="$json,\"cache_read_tokens\":$value"
+    fi
+    value="$(_telemetry_num "${AUTOPILOT_TM_COST_USD:-}")"
+    [ -z "$value" ] || json="$json,\"cost_usd\":$value"
+    value="$(_telemetry_num "${AUTOPILOT_TM_CONTEXT_RATIO:-}")"
+    [ -z "$value" ] || json="$json,\"context_ratio\":$value"
+    if [ -n "${AUTOPILOT_TM_NUM_TURNS:-}" ]; then
+      value="$(_telemetry_int "$AUTOPILOT_TM_NUM_TURNS")"
+      json="$json,\"num_turns\":$value"
+    fi
+    if [ -n "${AUTOPILOT_TM_API_MS:-}" ]; then
+      value="$(_telemetry_int "$AUTOPILOT_TM_API_MS")"
+      json="$json,\"api_ms\":$value"
+    fi
+    if [ -n "${AUTOPILOT_TM_ATTEMPT:-}" ]; then
+      value="$(_telemetry_int "$AUTOPILOT_TM_ATTEMPT")"
+      json="$json,\"attempt\":$value"
+    fi
+    if [ -n "${AUTOPILOT_TM_FAILURE_CLASS:-}" ]; then
+      json="$json,\"failure_class\":\"$(telemetry_json_escape "$AUTOPILOT_TM_FAILURE_CLASS")\""
+    fi
+    if [ -n "${AUTOPILOT_TM_PROMPT_BYTES:-}" ]; then
+      value="$(_telemetry_int "$AUTOPILOT_TM_PROMPT_BYTES")"
+      json="$json,\"prompt_bytes\":$value"
+    fi
+    if [ -n "${AUTOPILOT_TM_OUTPUT_BYTES:-}" ]; then
+      value="$(_telemetry_int "$AUTOPILOT_TM_OUTPUT_BYTES")"
+      json="$json,\"output_bytes\":$value"
+    fi
+    case "${AUTOPILOT_TM_IS_ERROR:-}" in
+      true|false) json="$json,\"is_error\":${AUTOPILOT_TM_IS_ERROR}" ;;
+    esac
+    telemetry_emit "$json}"
   } 2>/dev/null || true
   return 0
 }
