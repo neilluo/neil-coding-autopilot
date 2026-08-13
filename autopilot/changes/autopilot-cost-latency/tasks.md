@@ -80,7 +80,10 @@ exit 0
 
 ## Task 3: dispatch.sh —— 真实 usage 抓取 + 超时哑弹修复
 
-**Status**: PENDING
+**Status**: IN_PROGRESS
+
+> **执行纪律（必读，实测教训）**：拿到任务**立刻用 Write/Edit 落盘**，禁止先输出长篇分析或"让我先读一下…" —— 本环境存在约 60s 空闲断流，已多次在分析阶段被掐断导致 **0 文件落盘、白耗一轮**。需要读文件就直接读、读完马上写。解释压缩到最后一两句。
+> 回复**末尾必须有独占一行**的 `**Status:** DONE`（或 `**Status:** BLOCKED`），该行**不得夹带其它文字**——解析器只认末 15 行里行首锚定的这一行，行内提及一概不算。
 
 落地 spec D5/D6/D10。改 `scripts/dispatch.sh`（**保持既有 flag 与退出码语义**）。
 
@@ -109,6 +112,9 @@ exit 0
 ## Task 4: run-track-a.sh —— 瞬时故障重试且不扣轮次
 
 **Status**: PENDING
+
+> **执行纪律（必读，实测教训）**：拿到任务**立刻用 Write/Edit 落盘**，禁止先输出长篇分析或"让我先读一下…" —— 本环境存在约 60s 空闲断流，已多次在分析阶段被掐断导致 **0 文件落盘、白耗一轮**。需要读文件就直接读、读完马上写。解释压缩到最后一两句。
+> 回复**末尾必须有独占一行**的 `**Status:** DONE`（或 `**Status:** BLOCKED`），该行**不得夹带其它文字**——解析器只认末 15 行里行首锚定的这一行，行内提及一概不算。
 
 落地 spec D2/D3/D4（本次核心）。改 `scripts/run-track-a.sh`。
 
@@ -145,6 +151,9 @@ exit 0
 
 **Status**: PENDING
 
+> **执行纪律（必读，实测教训）**：拿到任务**立刻用 Write/Edit 落盘**，禁止先输出长篇分析或"让我先读一下…" —— 本环境存在约 60s 空闲断流，已多次在分析阶段被掐断导致 **0 文件落盘、白耗一轮**。需要读文件就直接读、读完马上写。解释压缩到最后一两句。
+> 回复**末尾必须有独占一行**的 `**Status:** DONE`（或 `**Status:** BLOCKED`），该行**不得夹带其它文字**——解析器只认末 15 行里行首锚定的这一行，行内提及一概不算。
+
 落地 spec D8/D9。
 
 1. 新建 `scripts/review-context.sh`：
@@ -176,6 +185,9 @@ exit 0
 
 **Status**: PENDING
 
+> **执行纪律（必读，实测教训）**：拿到任务**立刻用 Write/Edit 落盘**，禁止先输出长篇分析或"让我先读一下…" —— 本环境存在约 60s 空闲断流，已多次在分析阶段被掐断导致 **0 文件落盘、白耗一轮**。需要读文件就直接读、读完马上写。解释压缩到最后一两句。
+> 回复**末尾必须有独占一行**的 `**Status:** DONE`（或 `**Status:** BLOCKED`），该行**不得夹带其它文字**——解析器只认末 15 行里行首锚定的这一行，行内提及一概不算。
+
 落地 spec P2 的消费端。改 `scripts/daily-analysis.sh`：
 
 1. metrics JSON 增加（字段名冻结）：`tokens_input_total` `tokens_output_total` `tokens_cache_read_total` `cost_usd_total`，以及 `by_stage`（对 implement/review/fix 各给 `count/duration_s/input_tokens/output_tokens/cost_usd`）与 `by_model`（同结构，按 model 分组）。
@@ -188,6 +200,9 @@ exit 0
 ## Task 7: 每日任务 TCC 修复 + 日志目录迁移工具
 
 **Status**: PENDING
+
+> **执行纪律（必读，实测教训）**：拿到任务**立刻用 Write/Edit 落盘**，禁止先输出长篇分析或"让我先读一下…" —— 本环境存在约 60s 空闲断流，已多次在分析阶段被掐断导致 **0 文件落盘、白耗一轮**。需要读文件就直接读、读完马上写。解释压缩到最后一两句。
+> 回复**末尾必须有独占一行**的 `**Status:** DONE`（或 `**Status:** BLOCKED`），该行**不得夹带其它文字**——解析器只认末 15 行里行首锚定的这一行，行内提及一概不算。
 
 落地 spec D11/D12（用户已选"搬到非 TCC 目录"）。
 
@@ -214,6 +229,9 @@ exit 0
 
 **Status**: PENDING
 
+> **执行纪律（必读，实测教训）**：拿到任务**立刻用 Write/Edit 落盘**，禁止先输出长篇分析或"让我先读一下…" —— 本环境存在约 60s 空闲断流，已多次在分析阶段被掐断导致 **0 文件落盘、白耗一轮**。需要读文件就直接读、读完马上写。解释压缩到最后一两句。
+> 回复**末尾必须有独占一行**的 `**Status:** DONE`（或 `**Status:** BLOCKED`），该行**不得夹带其它文字**——解析器只认末 15 行里行首锚定的这一行，行内提及一概不算。
+
 落地 spec D14/O6。目标：`skills/using-neil-autopilot/SKILL.md` 从 16.4KB 降到 **≤9216 字节**，且强制约束一条不丢。
 
 1. **留在正文**（一字不改地保留语义）：frontmatter、一句话定位、`<HARD-GATE>` 全部 7 条、执行档位表 + "控制器永不内联写码"铁律 + `run-track-a.sh` 用法与前置、判定规则、任务类型分流表、Skill 调用规则（通用 6 条 + 两档各自要点）、路径约定表、`{STAGE}_STATUS` 状态行与 REVIEW 三态指针、以及一张「按需加载」索引表（列出下面 5 篇 references 及**何时读**）。
@@ -238,6 +256,9 @@ exit 0
 
 **Status**: PENDING
 
+> **执行纪律（必读，实测教训）**：拿到任务**立刻用 Write/Edit 落盘**，禁止先输出长篇分析或"让我先读一下…" —— 本环境存在约 60s 空闲断流，已多次在分析阶段被掐断导致 **0 文件落盘、白耗一轮**。需要读文件就直接读、读完马上写。解释压缩到最后一两句。
+> 回复**末尾必须有独占一行**的 `**Status:** DONE`（或 `**Status:** BLOCKED`），该行**不得夹带其它文字**——解析器只认末 15 行里行首锚定的这一行，行内提及一概不算。
+
 1. `AGENTS.md`：环境变量表补齐本次新增/变更项并注明默认值与优先级 —— `AUTOPILOT_TIMEOUT_<STAGE>`、`AUTOPILOT_KILL_AFTER_S`、`AUTOPILOT_TRANSPORT_RETRIES`、`AUTOPILOT_RETRY_BACKOFF_S`、`AUTOPILOT_USAGE_JSON`、`AUTOPILOT_RAW_JSON`、`AUTOPILOT_REVIEW_DIFF_BUDGET`、`AUTOPILOT_EMPTY_LOG_BYTES`、`NEIL_AUTOPILOT_KEEP_DAYS`(30)、`NEIL_AUTOPILOT_LOG_DIR`(新默认 `~/Library/Logs/neil-autopilot`)；观测脚本清单补 `classify-outcome.sh`/`review-context.sh`/`migrate-log-root.sh`/`smoke-all.sh`。**必须写明超时优先级链**。
 2. `autopilot/knowledge/raw/` 新增一篇 `20260813-cost-latency-diagnosis.md`：记录本次实测数据（review 占 47%、6 次 UNKNOWN 全是 exit 1、timeout 无 `-k` 的哑弹实验、launchd TCC 126、telemetry 无 token 字段）与修复方案要点，标注数据来源文件路径。
 3. 更新 `autopilot/knowledge/wiki/entities/telemetry-system.md`：补 dispatch 事件的新字段表 + 「token 从 `qodercli -o json` 信封抽取、缺失即缺省不写 0」的口径。
@@ -249,6 +270,9 @@ exit 0
 ## Task 10: 自迭代安全 — 递归护栏 + 并发锁 + smoke 遥测隔离
 
 **Status**: PENDING
+
+> **执行纪律（必读，实测教训）**：拿到任务**立刻用 Write/Edit 落盘**，禁止先输出长篇分析或"让我先读一下…" —— 本环境存在约 60s 空闲断流，已多次在分析阶段被掐断导致 **0 文件落盘、白耗一轮**。需要读文件就直接读、读完马上写。解释压缩到最后一两句。
+> 回复**末尾必须有独占一行**的 `**Status:** DONE`（或 `**Status:** BLOCKED`），该行**不得夹带其它文字**——解析器只认末 15 行里行首锚定的这一行，行内提及一概不算。
 
 落地 spec §8（P8）。**这是唯一能防"plugin 改自己时无限递归烧 token"的门禁**，实现时逐条对齐，不要合并简化。
 
@@ -272,6 +296,9 @@ exit 0
 
 **Status**: PENDING
 
+> **执行纪律（必读，实测教训）**：拿到任务**立刻用 Write/Edit 落盘**，禁止先输出长篇分析或"让我先读一下…" —— 本环境存在约 60s 空闲断流，已多次在分析阶段被掐断导致 **0 文件落盘、白耗一轮**。需要读文件就直接读、读完马上写。解释压缩到最后一两句。
+> 回复**末尾必须有独占一行**的 `**Status:** DONE`（或 `**Status:** BLOCKED`），该行**不得夹带其它文字**——解析器只认末 15 行里行首锚定的这一行，行内提及一概不算。
+
 落地 spec §10。**只允许离线、确定性、零 token 的测量**（禁止为测量去发真实模型请求）。
 
 1. 新建 `scripts/bench-compare.sh`，输出一张 markdown 表到 stdout 并写入 `autopilot/changes/autopilot-cost-latency/bench-report.md`，包含三组硬数字：
@@ -293,6 +320,9 @@ exit 0
 
 **Status**: PENDING
 
+> **执行纪律（必读，实测教训）**：拿到任务**立刻用 Write/Edit 落盘**，禁止先输出长篇分析或"让我先读一下…" —— 本环境存在约 60s 空闲断流，已多次在分析阶段被掐断导致 **0 文件落盘、白耗一轮**。需要读文件就直接读、读完马上写。解释压缩到最后一两句。
+> 回复**末尾必须有独占一行**的 `**Status:** DONE`（或 `**Status:** BLOCKED`），该行**不得夹带其它文字**——解析器只认末 15 行里行首锚定的这一行，行内提及一概不算。
+
 **只做一件事**：新建 `scripts/smoke-parse-markers.sh`（不改其它文件）。用 fixture 逐条断言 `scripts/parse-markers.sh`，六条**全部必须有**（spec §11 D19 第 5 条）：
 
 1. 真实截断日志（正文行内提及四个标记名、末尾无锚定行）→ `status` 得 `UNKNOWN`。fixture 正文直接用：
@@ -311,6 +341,9 @@ exit 0
 ## Task 13: classify-outcome.sh 改用锚定解析 + D18 长度门
 
 **Status**: PENDING
+
+> **执行纪律（必读，实测教训）**：拿到任务**立刻用 Write/Edit 落盘**，禁止先输出长篇分析或"让我先读一下…" —— 本环境存在约 60s 空闲断流，已多次在分析阶段被掐断导致 **0 文件落盘、白耗一轮**。需要读文件就直接读、读完马上写。解释压缩到最后一两句。
+> 回复**末尾必须有独占一行**的 `**Status:** DONE`（或 `**Status:** BLOCKED`），该行**不得夹带其它文字**——解析器只认末 15 行里行首锚定的这一行，行内提及一概不算。
 
 **只改两个文件**：`scripts/classify-outcome.sh` 与 `scripts/smoke-classify-outcome.sh`。
 
