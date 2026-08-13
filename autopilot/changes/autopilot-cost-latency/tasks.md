@@ -199,7 +199,7 @@ exit 0
 
 ## Task 7: 每日任务 TCC 修复 + 日志目录迁移工具
 
-**Status**: BLOCKED
+**Status**: IN_PROGRESS
 
 > **执行纪律（必读，实测教训）**：拿到任务**立刻用 Write/Edit 落盘**，禁止先输出长篇分析或"让我先读一下…" —— 本环境存在约 60s 空闲断流，已多次在分析阶段被掐断导致 **0 文件落盘、白耗一轮**。需要读文件就直接读、读完马上写。解释压缩到最后一两句。
 > 回复**末尾必须有独占一行**的 `**Status:** DONE`（或 `**Status:** BLOCKED`），该行**不得夹带其它文字**——解析器只认末 15 行里行首锚定的这一行，行内提及一概不算。
@@ -362,5 +362,26 @@ exit 0
    - 6KB 正文、其 `tail -20` 内含 `502 Bad Gateway`、无锚定标记 → `APP`（超长度门）
    - 250B 且末行 `**Status:** DONE`、`exit 0` → `OK`（短但有结论，不得判 EMPTY）
 3. 开头 `unset AUTOPILOT_RUN_ID`。
+
+**Verify**: `bash scripts/smoke-classify-outcome.sh && bash scripts/smoke-all.sh`
+
+## Task 14: 无结论即视为未完成（收紧 EMPTY 判定，堵住字节数漏网）
+
+**Status**: PENDING
+
+> **执行纪律（必读，实测教训）**：拿到任务**立刻用 Write/Edit 落盘**，禁止先输出长篇分析或"让我先读一下…" —— 本环境存在约 60s 空闲断流，已多次在分析阶段被掐断导致 **0 文件落盘、白耗一轮**。需要读文件就直接读、读完马上写。解释压缩到最后一两句。
+> 回复**末尾必须有独占一行**的 `**Status:** DONE`（或 `**Status:** BLOCKED`），该行**不得夹带其它文字**——解析器只认末 15 行里行首锚定的这一行，行内提及一概不算。
+
+**实测漏网**（spec §11 D19 fixture ① 未真正被满足）：`scripts/classify-outcome.sh 0 <327B 截断日志>` 当前输出 `OK`，应为 `EMPTY`。该日志正文行内提及四个标记名、末尾无锚定结论，只因 327 ≥ 300（`AUTOPILOT_EMPTY_LOG_BYTES`）就被判为正常。后果：dispatch 层的廉价重试不触发，只能靠外层重跑整个 Task（要重新 implement），**更慢更贵**——与本次治理目标相反。
+
+1. `scripts/classify-outcome.sh` 收紧规则：**dispatch 日志里没有任何锚定标记，就说明 worker 没给出结论**，与字节数无关。在既有顺序中加入：
+   - 规则 2 之后、传输层正则之前插入：若 `parse-markers.sh` 的 status 与 review **都是 `UNKNOWN`**（= 无结论）且 `exit_code == 0` → `EMPTY`（触发重试）。
+   - 保留开关 `AUTOPILOT_NO_MARKER_IS_EMPTY`（**默认 1 = 开启**）；设为 `0` 时退回旧的仅按字节数判定，便于排障与向后兼容。
+   - `exit_code != 0` 且无结论：仍按现有顺序（传输正则 → 字节数 → APP）判定，**不要改动**。
+2. `scripts/smoke-classify-outcome.sh` 新增三条断言（**判别样例**，缺一不可）：
+   - 327B 级"截断但行内提及标记"日志 + `exit 0` → `EMPTY`（正文直接用：`- Add verdict marker check (REVIEW_PASS/REVIEW_FAIL/**Status:** DONE/**Status:** BLOCKED) before transport`，再补足到 >300 字节）
+   - 同一日志 + `AUTOPILOT_NO_MARKER_IS_EMPTY=0` → `OK`（证明开关有效、旧行为可回退）
+   - 5KB 正文 + 末行 `**Status:** DONE` + `exit 0` → `OK`（有结论就不许判 EMPTY，防止新规则误伤长输出）
+3. 不得放宽或删除任何既有断言；`AUTOPILOT_EMPTY_LOG_BYTES` 的语义与默认值 300 保持不变。
 
 **Verify**: `bash scripts/smoke-classify-outcome.sh && bash scripts/smoke-all.sh`
