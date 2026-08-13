@@ -3,6 +3,7 @@
 # USAGE: smoke-classify-outcome.sh
 # EXIT CODES: 0 when all assertions pass; 1 otherwise.
 set -uo pipefail
+unset AUTOPILOT_RUN_ID
 
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   echo "Usage: smoke-classify-outcome.sh"
@@ -60,6 +61,34 @@ assert_classification "substantive success" 0 "$WORK/ok.log" OK
 
 assert_classification "exit 124 timeout" 124 "$WORK/transport.log" TIMEOUT
 assert_classification "exit 137 timeout" 137 "$WORK/missing-timeout.log" TIMEOUT
+
+# New cases (D18/D19 anchor-parse rules)
+
+# Case 1: exit 1 + >300B body with "Unable to connect" text + REVIEW_FAIL marker → APP (not TRANSPORT)
+{
+  printf '%310s\n' '' | tr ' ' x
+  printf 'Unable to connect to the remote service during processing.\n'
+  printf '**REVIEW_FAIL**\n'
+} > "$WORK/app-with-connect.log"
+assert_classification "long log with transport text and REVIEW_FAIL marker" 1 "$WORK/app-with-connect.log" APP
+
+# Case 2: short log with only "Unable to connect." → TRANSPORT
+printf 'Unable to connect.\n' > "$WORK/short-transport.log"
+assert_classification "short log Unable to connect only" 1 "$WORK/short-transport.log" TRANSPORT
+
+# Case 3: 6KB body, tail -20 contains "502 Bad Gateway", no anchor marker → APP (exceeds transport length gate)
+{
+  python3 -c "print('x' * 6144)"
+  printf '502 Bad Gateway\n'
+} > "$WORK/long-gateway.log"
+assert_classification "6KB log tail has 502 but no marker exceeds gate" 1 "$WORK/long-gateway.log" APP
+
+# Case 4: 250B body, last line "**Status:** DONE", exit 0 → OK (anchor present, not EMPTY)
+{
+  printf '%230s\n' '' | tr ' ' x
+  printf '**Status:** DONE\n'
+} > "$WORK/short-done.log"
+assert_classification "250B log with Status DONE exit 0" 0 "$WORK/short-done.log" OK
 
 if [ "$FAILED" -eq 0 ]; then
   echo "SMOKE(classify-outcome): ALL PASS"
