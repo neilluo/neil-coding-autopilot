@@ -33,6 +33,15 @@ for count in 0 1 3; do
   [ "$(cksum "$target_dir/metrics/daily.json")" = "$before" ]
 done
 
+no_runs_source="$TMP/no-runs-source"
+no_runs_target="$TMP/no-runs-target"
+mkdir -p "$no_runs_source/metrics"
+printf 'metric\n' > "$no_runs_source/metrics/daily.json"
+"$SCRIPT_DIR/migrate-log-root.sh" --from "$no_runs_source" --to "$no_runs_target" >/dev/null
+[ -d "$no_runs_source" ]
+[ -f "$no_runs_target/metrics/daily.json" ]
+[ ! -e "$no_runs_target/runs" ]
+
 dry_source="$TMP/dry-source"
 dry_target="$TMP/dry-target"
 make_source "$dry_source" 1

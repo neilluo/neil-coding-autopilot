@@ -33,6 +33,8 @@ staged="$FAKE_HOME/Library/Application Support/neil-autopilot/scripts/daily-anal
 [ -x "$staged" ]
 ! grep -q '/Desktop/' "$plist"
 grep -q "$FAKE_HOME/Library/Logs/neil-autopilot" "$plist"
+grep -Fq 'scripts/migrate-log-root.sh" --from "' "$protected_stage_output"
+grep -Fq -- '--to "' "$protected_stage_output"
 
 for mode in --stage-scripts --no-stage; do
   rm -f "$plist"
@@ -40,6 +42,26 @@ for mode in --stage-scripts --no-stage; do
   [ -f "$plist" ]
   ! grep -q '/Desktop/' "$plist"
 done
+
+protected_plugin="$FAKE_HOME/Desktop/plugin"
+mkdir -p "$protected_plugin"
+cp -R "$SCRIPT_DIR" "$protected_plugin/scripts"
+rm -f "$plist"
+if bash "$protected_plugin/scripts/install-daily-schedule.sh" \
+  --log-dir "$FAKE_HOME/Library/Logs/neil-autopilot" --no-stage >"$TMP/protected-script-no-stage.out" 2>&1; then
+  echo "expected protected script path with --no-stage to fail" >&2
+  exit 1
+fi
+[ ! -e "$plist" ]
+grep -q 'migrate-log-root.sh' "$TMP/protected-script-no-stage.out"
+
+bash "$protected_plugin/scripts/install-daily-schedule.sh" \
+  --log-dir "$FAKE_HOME/Library/Logs/neil-autopilot" --stage-scripts >"$TMP/protected-script-stage.out" 2>&1
+[ -f "$plist" ]
+grep -Fq "$FAKE_HOME/Library/Application Support/neil-autopilot/scripts/daily-analysis.sh" "$plist"
+! grep -q '/Desktop/' "$plist"
+[ -x "$FAKE_HOME/Library/Application Support/neil-autopilot/scripts/telemetry.sh" ]
+[ -x "$FAKE_HOME/Library/Application Support/neil-autopilot/scripts/dispatch.sh" ]
 
 rm -f "$plist"
 unset NEIL_AUTOPILOT_LOG_DIR NEIL_AUTOPILOT_KEEP_DAYS

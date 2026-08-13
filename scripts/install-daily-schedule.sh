@@ -75,8 +75,11 @@ macos_install() {
     scheduled_script="$staged_scripts/daily-analysis.sh"
     echo "plugin 更新后需重跑本脚本以刷新 staged 副本。"
     if is_protected "$effective_log"; then
+      local protected_log="$effective_log"
       effective_log="$HOME/Library/Logs/neil-autopilot"; mkdir -p "$effective_log"
       echo "受保护日志路径已改为安全路径: $effective_log"
+      printf '迁移已有日志（只复制不删除）: "%s" --from "%s" --to "%s"\n' \
+        "$staged_scripts/migrate-log-root.sh" "$protected_log" "$effective_log"
     fi
   fi
   if is_protected "$scheduled_script" || is_protected "$effective_log"; then print_tcc_fix "$scheduled_script / $effective_log"; exit 1; fi

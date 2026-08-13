@@ -49,9 +49,18 @@ for section in runs metrics reports; do
   copy_tree "$section"
 done
 
+count_jsonl_lines() {
+  local runs_dir="$1"
+  if [ ! -d "$runs_dir" ]; then
+    echo 0
+    return
+  fi
+  find "$runs_dir" -type f -name '*.jsonl' -exec cat {} \; | wc -l | tr -d ' '
+}
+
 if [ "$DRY_RUN" -eq 0 ]; then
-  source_lines="$(find "$FROM/runs" -type f -name '*.jsonl' -exec cat {} \; 2>/dev/null | wc -l | tr -d ' ')"
-  target_lines="$(find "$TO/runs" -type f -name '*.jsonl' -exec cat {} \; 2>/dev/null | wc -l | tr -d ' ')"
+  source_lines="$(count_jsonl_lines "$FROM/runs")"
+  target_lines="$(count_jsonl_lines "$TO/runs")"
   if [ "$target_lines" -lt "$source_lines" ]; then
     echo "ERROR: validation failed: target jsonl lines ($target_lines) < source ($source_lines)" >&2
     exit 1
