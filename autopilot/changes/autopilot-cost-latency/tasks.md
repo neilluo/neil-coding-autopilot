@@ -223,3 +223,24 @@
 5. 不改任何脚本逻辑（本 Task 只动文档）。
 
 **Verify**: `bash scripts/smoke-all.sh && grep -q 'AUTOPILOT_KILL_AFTER_S' AGENTS.md && grep -q 'AUTOPILOT_TRANSPORT_RETRIES' AGENTS.md && grep -q 'Library/Logs/neil-autopilot' AGENTS.md && test -f autopilot/knowledge/raw/20260813-cost-latency-diagnosis.md && grep -q 'input_tokens' autopilot/knowledge/wiki/entities/telemetry-system.md`
+
+## Task 10: 自迭代安全 — 递归护栏 + 并发锁 + smoke 遥测隔离
+
+**Status**: PENDING
+
+落地 spec §8（P8）。**这是唯一能防"plugin 改自己时无限递归烧 token"的门禁**，实现时逐条对齐，不要合并简化。
+
+1. `scripts/run-track-a.sh` 与 `scripts/run-autopilot.sh`：解析参数**之前**做启动自检 —— 若继承到 `AUTOPILOT_ROLE=worker`，向 stderr 打印 `ERROR: nested autopilot run refused (AUTOPILOT_ROLE=worker)` 并 `exit 2`；仅当 `AUTOPILOT_ALLOW_NESTED=1` 时放行（供 smoke 用）。
+2. `scripts/dispatch.sh`：**在 `export AUTOPILOT_ROLE=worker` 之前**把继承值快照到局部变量（如 `INHERITED_ROLE`），若其为 `worker` 且 `MODEL != TestModel` → stderr 打印 `ERROR: nested worker spawn refused` 并 `exit 2`；`TestModel` 放行以保留 smoke 能力。**注意执行顺序**：读快照必须早于 export，否则永远自我命中。
+3. 三个 prompt builder（`build_impl_prompt` / `build_fix_prompt` / `build_review_prompt`）统一追加一段禁令，措辞含以下关键词以便断言：`禁止调用任何 autopilot-* / using-neil-autopilot / neil-coding-autopilot skill`、`禁止执行 run-track-a.sh / run-autopilot.sh / dispatch.sh`、`只做本 Task 描述的事`。
+4. 并发锁：`run-track-a.sh` 用 `mkdir "$CHANGE_DIR/.lock"`（原子）加锁，锁内写 `pid` 与 epoch；已存在且（PID 仍存活 且 未超 12h）→ `exit 2` 并提示持有者 PID；否则视为陈旧锁自动接管。正常结束与 `trap`（INT/TERM/EXIT）路径都要清锁。`.lock` 必须进 `.gitignore`（幂等追加）。
+5. smoke 遥测隔离：所有 `scripts/smoke-*.sh` 启动时 `unset AUTOPILOT_RUN_ID`（不要在 telemetry.sh 里特判 smoke 名字）。
+6. 新增 `scripts/smoke-recursion-guard.sh`，逐条断言：
+   - `AUTOPILOT_ROLE=worker bash scripts/run-track-a.sh --dry-run ...` → rc=2 且 stderr 含 `refused`；加 `AUTOPILOT_ALLOW_NESTED=1` 后不再是 2。
+   - `AUTOPILOT_ROLE=worker` 调 `dispatch.sh --model Ultimate` → rc=2；`--model TestModel` → rc=0（**判别样例**：证明护栏不是一刀切）。
+   - 同一 `--change-dir` 起第二个 `run-track-a.sh` → rc=2；把 `.lock` 的 mtime 倒推 13h 后 → 可被接管（rc≠2）。
+   - 三个 prompt builder 的产物都含第 3 条的禁令关键词（用 TestModel dry 跑一轮取 prompt 文件断言）。
+   - 遥测隔离：`NEIL_AUTOPILOT_LOG_DIR=<临时目录> AUTOPILOT_RUN_ID=real-xyz bash scripts/smoke-dispatch.sh` 后，临时目录里的 jsonl **不得**出现 `real-xyz`。
+7. 不得放宽或删除现有 14 个 smoke 的任何断言。
+
+**Verify**: `bash scripts/smoke-all.sh`

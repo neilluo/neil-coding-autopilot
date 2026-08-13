@@ -119,3 +119,26 @@
 6. **不删用户数据**：`migrate-log-root.sh` 只复制；`telemetry_rotate` 不进主链路。
 
 ANALYZE_STATUS=DONE
+
+## 7. 追加根因 P7（2026-08-13 23:40 实测，替换先前"后端不健康"的错误判断）
+
+`reviewer=Ultimate` + **需长时间多轮工具调用的重 prompt** ⟹ 走完约 130~175s 后 **rc=0 但 stdout 恰好 1 字节（空）**，`parse_review` 抓不到裁决 → `UNKNOWN` → fail-closed 扣轮次。四组对照（同一 prompt / 同一 cwd，只换单一变量）：
+
+| 变量 | model | cwd | prompt | rc | 耗时 | stdout |
+|---|---|---|---|---|---|---|
+| 重放 | Ultimate | 插件仓库 | 真实 review prompt | 0 | 134s | **1B（空）** |
+| E1 | Ultimate | /tmp | trivial | 0 | 6s | 12B `REVIEW_PASS` |
+| E2 | Ultimate | 插件仓库 | trivial | 0 | 7s | 12B `REVIEW_PASS` |
+| E3 | Performance | 插件仓库 | 真实 review prompt | 0 | 143s | 2035B 完整审查 + `REVIEW_PASS` |
+
+排除：服务可用性（E1/E2 秒回）、仓库 hooks / AGENTS.md（E2 同 cwd 正常）、prompt 本身（E3 同 prompt 正常）。归因：**Ultimate 档位在 headless 长会话下最终文本不落 stdout**（qodercli 侧行为差异，非本 plugin 缺陷）。
+
+**决策 D16**：`AUTOPILOT_REVIEWER_MODEL` 默认值由 `Ultimate` 改为 `Performance`（E3 证明其 CR 质量足够——它主动提了 `set -uo pipefail` 与边界覆盖两条 minor）。`Ultimate` 保留为可选值并在 AGENTS.md 标注该已知缺陷。
+
+**决策 D17**：`EMPTY` 类（rc=0 且输出 < 阈值）必须与 `TRANSPORT` 同等对待——**重试且不扣 CR 轮次**。`classify-outcome.sh` 已含该分支（Task 1 第 4 条），Task 3 接线时不得漏。
+
+## 8. 追加问题 P8：自迭代（plugin 改自己）缺递归护栏
+
+实测事实：① `~/.qoder/skills/` 下 `_shared`、`autopilot-*`、`neil-coding-autopilot`、`using-neil-autopilot` **全部是软链到本仓** → 改仓库即实时改掉当前会话与所有 worker 加载的 skill；② `AUTOPILOT_ROLE=worker` 目前**仅**用于 hooks 写权限白名单，全仓无任何递归防护；③ worker prompt 未禁止调用 autopilot skill / 执行编排脚本；④ `run-track-a.sh` 无并发锁（同一 change-dir 可并行多实例）；⑤ **env 穿透已实测**：worker 跑 `smoke-all.sh` → 内部 `dispatch.sh(TestModel)` 继承 `AUTOPILOT_RUN_ID`，42 条 fixture 事件被记进真实 run `autopilot-cost-latency-20260813-225354`，污染成本统计。
+
+今日 worker 日志全量 grep `Skill(` / `run-track-a.sh --change-dir` = **空**，即嵌套尚未真实发生；但通道齐备（bypass_permissions + cwd 在插件仓 + 任务文本满是 autopilot 关键词），一旦 worker 决定调 skill 即无限递归、指数烧 token。→ 见 Task 10。
