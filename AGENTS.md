@@ -40,12 +40,22 @@ implement(worker-cli) → verify(编译) → review(reviewer-cli) → fix(worker
 | AUTOPILOT_INIT_MODEL | Performance | Harness 初始化阶段模型 |
 | AUTOPILOT_EVOLVE_MODEL | Ultimate | 知识沉淀阶段模型（需强归纳） |
 | AUTOPILOT_MAX_PARALLEL | 3 | 最大并行 Task 数 |
-| NEIL_AUTOPILOT_LOG_DIR | `$HOME/neil-autopilot-logs-analysis` | 遥测日志根（落在业务 CWD 内自动降级到 $TMPDIR） |
+| `AUTOPILOT_TIMEOUT_<STAGE>` | review=900 / implement=1800 / fix=900 / 其他=600 | 分阶段 worker 超时秒数；`<STAGE>` 为大写阶段名（如 `AUTOPILOT_TIMEOUT_REVIEW`） |
+| `AUTOPILOT_KILL_AFTER_S` | 30 | 超时发送 TERM 后等待多少秒再强制 KILL |
+| `AUTOPILOT_TRANSPORT_RETRIES` | 3 | TRANSPORT / EMPTY worker 的最大尝试次数 |
+| `AUTOPILOT_RETRY_BACKOFF_S` | 5 | 传输重试指数退避基数秒数（5/10/20） |
+| `AUTOPILOT_USAGE_JSON` | 1 | Qoder 且有 jq 时启用 `qodercli -o json` usage 信封；设 0 退回文本输出 |
+| `AUTOPILOT_RAW_JSON` | （未设置） | 可选：把 qodercli 原始 JSON 信封复制到指定路径 |
+| `AUTOPILOT_REVIEW_DIFF_BUDGET` | 120000 | reviewer 上下文最大字节数，超限显式标记 `TRUNCATED` |
+| `AUTOPILOT_EMPTY_LOG_BYTES` | 300 | worker 短日志判为 EMPTY / TRANSPORT 的字节阈值 |
+| NEIL_AUTOPILOT_LOG_DIR | `$HOME/Library/Logs/neil-autopilot` | 遥测日志根（落在业务 CWD 内自动降级到 $TMPDIR） |
 | NEIL_AUTOPILOT_TELEMETRY | 1 | 设 0 全局关闭遥测（fail-safe 开关） |
-| NEIL_AUTOPILOT_KEEP_DAYS | 3 | runs/ 原始日志保留天数（metrics/reports 长期保留） |
+| NEIL_AUTOPILOT_KEEP_DAYS | 30 | runs/ 原始日志保留天数（metrics/reports 长期保留） |
 | NEIL_AUTOPILOT_LOG_SINK | file | telemetry 写入后端；云端保险/未来 OSS/SLS 扩展点，未识别值兜底回退 file |
 | NEIL_AUTOPILOT_KB_DIR | `$HOME/.neil-autopilot/knowledge` | 全局跨项目知识库路径（`scripts/kb-path.sh` 解析单一事实源，C14/C8）；evolve 升迁通用经验 / kb-search 检索历史命中共用 (source: raw/20260719-archive-knowledge-loop.md) |
 | AUTOPILOT_DAILY_MODEL | Ultimate | 每日 analysis agent 模型 |
+
+超时取值以 `scripts/dispatch.sh` 为准，优先级为：CLI `--timeout` > `AUTOPILOT_TIMEOUT_<STAGE>` > `AUTOPILOT_TIMEOUT` > 内置阶段默认值；任一来源设为 `0` 表示不启用 timeout 包装。
 
 **统一调度约定**:
 ```bash
@@ -63,6 +73,10 @@ $AGENT_DISPATCH --model "MODEL" --cwd "$PROJECT_ROOT" \
 | 脚本 | 职责 |
 |------|------|
 | `scripts/telemetry.sh` | 可 source 的遥测 lib：emit/rotate/log_root，写侧零依赖、fail-safe（绝不污染 stdout / 不改 exit code） |
+| `scripts/classify-outcome.sh` | 按退出码、锚定标记与日志大小分类 `OK/TRANSPORT/TIMEOUT/EMPTY/APP`，供有界重试决策使用 |
+| `scripts/review-context.sh` | 生成预算受限的 review diff，上下文超限时保留文件概览并标记 `TRUNCATED` |
+| `scripts/migrate-log-root.sh` | 将旧日志根的 runs/metrics/reports 只复制到新目录并校验 JSONL 行数，不删除源数据 |
+| `scripts/smoke-all.sh` | 顺序执行全部 token-free `smoke-*.sh`，失败即停的统一回归入口 |
 | `scripts/daily-analysis.sh` | 每日编排：rotate runs/ → jq 聚合 metrics/ → dispatch 1 个 analysis agent 写 reports/（硬依赖 jq） |
 | `scripts/install-daily-schedule.sh` | 生成/加载每日 13:00 定时任务（macOS launchd plist / Linux crontab），固化 LOG_DIR + PATH |
 
