@@ -41,7 +41,7 @@
 
 **Verify**: `bash scripts/smoke-all.sh`
 
-## Task 1 增补（D18，随 Task 1 一起完成，Task 1 未含此项即视为未完成）
+### Task 1 增补（D18，随 Task 1 一起完成，Task 1 未含此项即视为未完成）
 
 9. **按 spec §9 的 D18 重排判定顺序**并补齐四个判别样例（①②③④ 全部进 `smoke-classify-outcome.sh`）。要点：新增"裁决/自述标记优先"规则（`REVIEW_PASS`/`REVIEW_FAIL`/`**Status:** DONE`/`**Status:** BLOCKED`）；传输层正则加**长度门** `AUTOPILOT_TRANSPORT_LOG_BYTES`（默认 4096）且**只匹配末 20 行**（用 `tail -20`）。已实测反例：`classify-outcome.sh 1 /tmp/probe-3.log` 当前错判 TRANSPORT，正确答案是 `APP`——修完必须亲自跑这条验证（该文件若已不存在，就用同样特征自造 fixture）。
 
