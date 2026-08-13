@@ -102,7 +102,7 @@ flowchart TD
 
 | Skill | 层级 | 职责 |
 |-------|------|------|
-| `using-neil-autopilot` | 入口 | Hook 自动注入 bootstrap context，声明执行档位、HARD-GATE、完整流程图 |
+| `using-neil-autopilot` | 入口 | Hook 自动注入精简 bootstrap context，声明执行档位与 HARD-GATE；流程图、目录、初始化、示例、恢复说明按需加载 `references/` |
 | `autopilot-init` | 顶层阶段 | Harness 初始化/审计（AGENTS.md + hooks + knowledge/wiki），已有则评分补全 |
 | `autopilot-explore` | 顶层阶段 | 需求澄清 + 设计方向确认（强制多轮交互，HARD-GATE，不可跳过） |
 | `autopilot-analyze` | 顶层阶段 | 基于 explore 产出生成 Spec + 多轮自检 |
@@ -252,11 +252,14 @@ autopilot/
 │       ├── progress.md           # 工作流状态（档位 A）
 │       └── explore-notes.md      # 澄清阶段的对话记录摘要
 │
-├── archive/                      # 已完成的历史变更
-│   └── YYYY-MM-DD-<feature>/
-│       ├── spec.md
-│       ├── tasks.md
-│       └── summary.md            # 完成摘要
+├── archive/                      # 已完成的历史变更（四层日期结构）
+│   └── YYYY/
+│       └── MM/
+│           └── MM-DD/
+│               └── YYYY-MM-DD-<feature>/
+│                   ├── spec.md
+│                   ├── tasks.md
+│                   └── summary.md        # 完成摘要
 │
 ├── knowledge/                    # Karpathy LLM Wiki 三层知识库
 │   ├── SCHEMA.md                 # 维护规则 + 项目元数据（≤200行）
