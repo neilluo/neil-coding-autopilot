@@ -20,7 +20,7 @@
 
 ## Task 1: parse-markers.sh —— 锚定式状态/裁决解析（单文件，正则已给死）
 
-**Status**: PENDING
+**Status**: DONE
 
 **只做一件事**：新建 `scripts/parse-markers.sh`。不要改任何其它文件。**正则已实测通过 7 条 fixture，照抄，不要自己重写。**
 
