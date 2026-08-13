@@ -43,11 +43,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DISPATCH="$SCRIPT_DIR/dispatch.sh"
 PARSE="$SCRIPT_DIR/parse-status.sh"
+PARSE_MARKERS="$SCRIPT_DIR/parse-markers.sh"
+CLASSIFY="$SCRIPT_DIR/classify-outcome.sh"
 TASK_STATE="$SCRIPT_DIR/task-state.sh"
 TELEMETRY="$SCRIPT_DIR/telemetry.sh"
 BT='`'   # backtick, for awk field-splitting on `code` spans
 
-for dep in "$DISPATCH" "$PARSE" "$TASK_STATE" "$TELEMETRY"; do
+for dep in "$DISPATCH" "$PARSE" "$PARSE_MARKERS" "$CLASSIFY" "$TASK_STATE" "$TELEMETRY"; do
   [ -f "$dep" ] || { echo "ERROR: missing sibling script: $dep" >&2; exit 1; }
 done
 
@@ -111,11 +113,16 @@ TASKS_DONE=0
 TASKS_BLOCKED=0
 RUN_START_TS="$(date +%s)"
 
+# Global state set/consumed by dispatch_worker and dispatch_with_retry
+WORKER_RC=0
+WORKER_OUTCOME="OK"
+LAST_WORKER_LOG=""
+
 # copy_artifact <src-log-file>: best-effort copy of a review/BLOCKED-step log
 # into $LOG_ROOT/runs/<run_id>/ for next-day analysis. Fail-safe: unwritable
 # LOG_ROOT or missing source is silently skipped (mirrors telemetry.sh style).
 copy_artifact() {
-  local src="${1:-}" root="" dest=""
+  local src="${LAST_WORKER_LOG:-${1:-}}" root="" dest=""
   {
     if [ -n "${RUN_ID:-}" ] && [ -f "$src" ]; then
       root="$(telemetry_log_root)"
@@ -168,19 +175,63 @@ task_verify() {  # per-task **Verify**: `cmd`; fall back to global verify
   if [ -n "$v" ]; then printf '%s' "$v"; else printf '%s' "$GLOBAL_VERIFY"; fi
 }
 
-# ── worker dispatch (captures rc without aborting under set -e) ───────────────
-# `stage` is passed as command-level env (not exported) so it never leaks
-# ("sticky-export") into a later dispatch call that forgot to set it.
+# ── worker dispatch ──────────────────────────────────────────────────────────
+# Sets globals: WORKER_RC, WORKER_OUTCOME, AUTOPILOT_TM_FAILURE_CLASS (env for telemetry)
 dispatch_worker() {
-  local stage="$1" model="$2" pfile="$3" instr="$4" outlog="$5" rc
+  local stage="$1" model="$2" pfile="$3" instr="$4" outlog="$5"
   set +e
   AUTOPILOT_PLATFORM="${AUTOPILOT_PLATFORM:-qoder}" \
     AUTOPILOT_STAGE="$stage" AUTOPILOT_RUN_ID="${RUN_ID:-}" \
+    AUTOPILOT_ATTEMPT="${AUTOPILOT_ATTEMPT:-}" \
     "$DISPATCH" --model "$model" --cwd "$CWD" --prompt-file "$pfile" --instruction "$instr" 2>&1 | tee "$outlog"
-  rc=${PIPESTATUS[0]}
+  WORKER_RC=${PIPESTATUS[0]}
   set -e
-  [ "$rc" -eq 0 ] || log "  WARN: dispatch exit=$rc (see $outlog)"
+  WORKER_OUTCOME="$("$CLASSIFY" "$WORKER_RC" "$outlog")"
+  if [ "$WORKER_OUTCOME" = "OK" ]; then
+    AUTOPILOT_TM_FAILURE_CLASS=""
+  else
+    AUTOPILOT_TM_FAILURE_CLASS="$WORKER_OUTCOME"
+    [ "$WORKER_RC" -eq 0 ] || log "  WARN: dispatch exit=$WORKER_RC outcome=$WORKER_OUTCOME (see $outlog)"
+  fi
   return 0
+}
+
+# ── dispatch with transport/empty retry (spec D2/D3/D4) ─────────────────────
+# Usage: dispatch_with_retry <stage> <model> <prompt-file> <instruction> <base-log>
+# Sets: LAST_WORKER_LOG, WORKER_RC, WORKER_OUTCOME
+dispatch_with_retry() {
+  local stage="$1" model="$2" pfile="$3" instr="$4" base_log="$5"
+  local max_attempts="${AUTOPILOT_TRANSPORT_RETRIES:-3}"
+  local backoff_base="${AUTOPILOT_RETRY_BACKOFF_S:-5}"
+  local attempt=1 outlog backoff mult i
+
+  [ "$max_attempts" -gt 0 ] || max_attempts=1
+  while true; do
+    outlog="${base_log%.log}-a${attempt}.log"
+    LAST_WORKER_LOG="$outlog"
+
+    AUTOPILOT_ATTEMPT="$attempt" dispatch_worker "$stage" "$model" "$pfile" "$instr" "$outlog"
+
+    case "$WORKER_OUTCOME" in
+      TRANSPORT|EMPTY)
+        if [ "$attempt" -lt "$max_attempts" ]; then
+          mult=1
+          i=1
+          while [ "$i" -lt "$attempt" ]; do
+            mult=$(( mult * 2 ))
+            i=$(( i + 1 ))
+          done
+          backoff=$(( backoff_base * mult ))
+          log "  transport failure (attempt $attempt/$max_attempts) → retry in ${backoff}s"
+          sleep "$backoff"
+          attempt=$(( attempt + 1 ))
+          continue
+        fi
+        log "  transport failure (attempt $attempt/$max_attempts) → exhausted"
+        ;;
+    esac
+    break
+  done
 }
 
 # ── prompt builders ──────────────────────────────────────────────────────────
@@ -236,11 +287,13 @@ build_review_prompt() {
     echo "REVIEW_FAIL   # 有 CRITICAL/MAJOR（并列出问题 + 文件:行号）"
   } > "$out"
 }
-parse_review() { grep -ioE 'REVIEW_(PASS|FAIL)' "$1" 2>/dev/null | tail -1 | tr '[:lower:]' '[:upper:]' || true; }
+
+# Use parse-markers.sh for anchored review verdict extraction (D19)
+parse_review() { "$PARSE_MARKERS" review "$1" 2>/dev/null || echo "UNKNOWN"; }
 
 # ── per-task inner loop ──────────────────────────────────────────────────────
 run_task() {
-  local n="$1" title status verify round=0 passed=0 st rv verify_status committed
+  local n="$1" title status verify round=0 passed=0 rv verify_status committed
   title="$(task_title "$n")"; status="$(task_status "$n")"; [ -n "$status" ] || status="PENDING"
   verify="$(task_verify "$n")"
 
@@ -258,14 +311,38 @@ run_task() {
 
   # 1. implement
   build_impl_prompt "$n" "$LOG_DIR/task-$n-impl-prompt.md"
-  log "  implement → dispatch($IMPL_MODEL)"
-  dispatch_worker "implement" "$IMPL_MODEL" "$LOG_DIR/task-$n-impl-prompt.md" \
+  log "  implement (round 1) → dispatch($IMPL_MODEL)"
+  dispatch_with_retry "implement" "$IMPL_MODEL" "$LOG_DIR/task-$n-impl-prompt.md" \
     "实现该 Task：读相关文件→写代码→跑验证命令；回复末尾输出一行 '**Status:** DONE'（做不了则 'BLOCKED' 并说明原因）。" \
     "$LOG_DIR/task-$n-impl.log"
-  st="$("$PARSE" "$LOG_DIR/task-$n-impl.log")"
+
+  # Handle transport/timeout exhaustion for implement
+  case "$WORKER_OUTCOME" in
+    TRANSPORT|EMPTY)
+      "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
+      copy_artifact
+      TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
+      telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" 0 false
+      log "  → stop (fail-closed, transport)"
+      echo "hint: transient failure — rerun with --resume to continue from this task"
+      exit 2
+      ;;
+    TIMEOUT)
+      "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
+      copy_artifact
+      TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
+      telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" 0 false
+      log "  → stop (fail-closed, timeout)"
+      echo "hint: transient failure — rerun with --resume to continue from this task"
+      exit 2
+      ;;
+  esac
+
+  local st
+  st="$("$PARSE" "$LAST_WORKER_LOG")"
   if [ "$st" != "DONE" ] && [ "$st" != "DONE_WITH_CONCERNS" ]; then
     "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
-    copy_artifact "$LOG_DIR/task-$n-impl.log"
+    copy_artifact
     TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
     telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" 0 false
     log "  Task $n BLOCKED at implement (status=$st) → stop (fail-closed)"; exit 2
@@ -281,8 +358,29 @@ run_task() {
         verify_status="fail"
         telemetry_emit_round "${RUN_ID:-}" "$n" "$round" "$verify_status" "UNKNOWN"
         build_fix_prompt "$n" "$LOG_DIR/task-$n-verify-$round.log" "$LOG_DIR/task-$n-fix-$round-prompt.md"
-        dispatch_worker "fix" "$IMPL_MODEL" "$LOG_DIR/task-$n-fix-$round-prompt.md" \
+        dispatch_with_retry "fix" "$IMPL_MODEL" "$LOG_DIR/task-$n-fix-$round-prompt.md" \
           "修复验证失败的问题→重跑验证；回复末尾输出 '**Status:** DONE'。" "$LOG_DIR/task-$n-fix-$round.log"
+        # Handle transport/timeout for fix
+        case "$WORKER_OUTCOME" in
+          TRANSPORT|EMPTY)
+            "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
+            copy_artifact
+            TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
+            telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" "$round" false
+            log "  → stop (fail-closed, transport)"
+            echo "hint: transient failure — rerun with --resume to continue from this task"
+            exit 2
+            ;;
+          TIMEOUT)
+            "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
+            copy_artifact
+            TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
+            telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" "$round" false
+            log "  → stop (fail-closed, timeout)"
+            echo "hint: transient failure — rerun with --resume to continue from this task"
+            exit 2
+            ;;
+        esac
         continue
       fi
       verify_status="pass"
@@ -297,17 +395,69 @@ run_task() {
     [ -s "$LOG_DIR/task-$n-files-$round.txt" ] || echo "(no changed files detected)" > "$LOG_DIR/task-$n-files-$round.txt"
     build_review_prompt "$LOG_DIR/task-$n-files-$round.txt" "$LOG_DIR/task-$n-review-$round-prompt.md" "$n"
     log "  review (round $round) → dispatch($REVIEW_MODEL)"
-    dispatch_worker "review" "$REVIEW_MODEL" "$LOG_DIR/task-$n-review-$round-prompt.md" \
+    dispatch_with_retry "review" "$REVIEW_MODEL" "$LOG_DIR/task-$n-review-$round-prompt.md" \
       "审查上述变更文件（逐一读取），回复末尾输出 REVIEW_PASS 或 REVIEW_FAIL（有 CRITICAL/MAJOR 才 FAIL 并列问题）。" \
       "$LOG_DIR/task-$n-review-$round.log"
-    rv="$(parse_review "$LOG_DIR/task-$n-review-$round.log")"
-    copy_artifact "$LOG_DIR/task-$n-review-$round.log"
+
+    # Handle transport/timeout for review
+    case "$WORKER_OUTCOME" in
+      TRANSPORT|EMPTY)
+        "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
+        copy_artifact
+        TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
+        telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" "$round" false
+        log "  → stop (fail-closed, transport)"
+        echo "hint: transient failure — rerun with --resume to continue from this task"
+        exit 2
+        ;;
+      TIMEOUT)
+        "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
+        copy_artifact
+        TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
+        telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" "$round" false
+        log "  → stop (fail-closed, timeout)"
+        echo "hint: transient failure — rerun with --resume to continue from this task"
+        exit 2
+        ;;
+    esac
+
+    # Only parse review verdict when outcome is OK or APP
+    case "$WORKER_OUTCOME" in
+      OK|APP)
+        rv="$(parse_review "$LAST_WORKER_LOG")"
+        ;;
+      *)
+        rv="UNKNOWN"
+        ;;
+    esac
+    copy_artifact
     telemetry_emit_round "${RUN_ID:-}" "$n" "$round" "$verify_status" "${rv:-UNKNOWN}"
     if [ "$rv" = "REVIEW_PASS" ]; then passed=1; log "  REVIEW_PASS"; break; fi
     log "  review = ${rv:-UNKNOWN} → fail-closed, fixer"
-    build_fix_prompt "$n" "$LOG_DIR/task-$n-review-$round.log" "$LOG_DIR/task-$n-fix-$round-prompt.md"
-    dispatch_worker "fix" "$IMPL_MODEL" "$LOG_DIR/task-$n-fix-$round-prompt.md" \
+    build_fix_prompt "$n" "$LAST_WORKER_LOG" "$LOG_DIR/task-$n-fix-$round-prompt.md"
+    dispatch_with_retry "fix" "$IMPL_MODEL" "$LOG_DIR/task-$n-fix-$round-prompt.md" \
       "按 CR 反馈修复→重跑验证；回复末尾输出 '**Status:** DONE'。" "$LOG_DIR/task-$n-fix-$round.log"
+    # Handle transport/timeout for fix after review
+    case "$WORKER_OUTCOME" in
+      TRANSPORT|EMPTY)
+        "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
+        copy_artifact
+        TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
+        telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" "$round" false
+        log "  → stop (fail-closed, transport)"
+        echo "hint: transient failure — rerun with --resume to continue from this task"
+        exit 2
+        ;;
+      TIMEOUT)
+        "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
+        copy_artifact
+        TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
+        telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" "$round" false
+        log "  → stop (fail-closed, timeout)"
+        echo "hint: transient failure — rerun with --resume to continue from this task"
+        exit 2
+        ;;
+    esac
   done
 
   if [ "$passed" -ne 1 ]; then

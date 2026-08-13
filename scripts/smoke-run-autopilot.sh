@@ -35,15 +35,19 @@ while [ $# -gt 0 ]; do
   esac
 done
 if grep -q "代码审查专家" "$attach" 2>/dev/null; then
+  printf 'review output %0400d\n' 0
   echo "REVIEW_PASS"
 elif grep -q "autopilot-finish" "$attach" 2>/dev/null; then
   touch "$WORK/finish.hit"
-  echo "FINISH_STATUS=DONE"
+  printf 'finish output %0400d\n' 0
+  echo "**Status:** DONE"
 elif grep -q "autopilot-evolve" "$attach" 2>/dev/null; then
   touch "$WORK/evolve.hit"
-  echo "EVOLVE_STATUS=DONE"
+  printf 'evolve output %0400d\n' 0
+  echo "**Status:** DONE"
 else
   echo "stub work $(date +%s)-$RANDOM" >> "$wdir/stub-proof.txt"
+  printf 'worker output %0400d\n' 0
   echo "**Status:** DONE"
 fi
 STUB
