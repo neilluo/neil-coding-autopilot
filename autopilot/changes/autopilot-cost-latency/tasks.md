@@ -45,6 +45,13 @@
 
 9. **按 spec §9 的 D18 重排判定顺序**并补齐四个判别样例（①②③④ 全部进 `smoke-classify-outcome.sh`）。要点：新增"裁决/自述标记优先"规则（`REVIEW_PASS`/`REVIEW_FAIL`/`**Status:** DONE`/`**Status:** BLOCKED`）；传输层正则加**长度门** `AUTOPILOT_TRANSPORT_LOG_BYTES`（默认 4096）且**只匹配末 20 行**（用 `tail -20`）。已实测反例：`classify-outcome.sh 1 /tmp/probe-3.log` 当前错判 TRANSPORT，正确答案是 `APP`——修完必须亲自跑这条验证（该文件若已不存在，就用同样特征自造 fixture）。
 
+10. **按 spec §11 的 D19 落地"锚定解析"**：新建 `scripts/parse-markers.sh` 作为**唯一实现**（供 classify-outcome.sh / parse-status.sh / run-track-a.sh 共用，禁止各写一份正则）。接口：`parse-markers.sh status <log>` → `DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|UNKNOWN`；`parse-markers.sh review <log>` → `REVIEW_PASS|REVIEW_FAIL|UNKNOWN`。规则严格按 D19 第 1/2/3 条（末 15 行 + 行首锚定 + 裁决须独占一行）。`classify-outcome.sh` 的规则 2 改为调用它。所有 D19 第 5 条的六个判别样例进 `smoke-classify-outcome.sh`（或新建 `scripts/smoke-parse-markers.sh`，两者皆可，但六条必须全在）。**造 fixture ① 时直接复制这段真实截断文本**：
+```
+Now I have a clear picture. The existing `classify-outcome.sh` needs D18 changes:
+- Add verdict marker check (REVIEW_PASS/REVIEW_FAIL/**Status:** DONE/**Status:** BLOCKED) before transport
+```
+
+
 ## Task 2: telemetry 扩展（token 字段 + 默认值调整）
 
 **Status**: PENDING
@@ -122,6 +129,12 @@
    - 原有三个 scenario（HAPPY / FAIL-CLOSED / COMMIT-FAILURE）必须继续全绿。
 
 **Verify**: `bash scripts/smoke-all.sh`
+
+### Task 4 增补（D19 接线，随 Task 4 一起完成）
+
+5. 把 `run-track-a.sh` 的 `parse_review()`（原第 239 行，全文 `grep -ioE 'REVIEW_(PASS|FAIL)' | tail -1`）与 `scripts/parse-status.sh` 全部改为调用 Task 1 产出的 `scripts/parse-markers.sh`，**删除**两处旧的全文 grep 实现（不是并存兜底——并存等于漏洞仍在）。
+6. `parse-status.sh` 的 CLI 契约与退出码保持不变（仍接受一个文件参数、仍在文件不存在时输出 `UNKNOWN` 且 exit 1），仅内部实现替换；`smoke-*` 里任何依赖它的断言不得放宽。
+7. 新增断言进 `smoke-run-track-a.sh`（或 Task 1 的 smoke，择一但必须有）：构造一个"正文提及 REVIEW_FAIL、末尾无锚定裁决"的 review 日志 fixture，断言 loop 把它当 `UNKNOWN`（→ 走重试而**不是** fixer），以及一个"末行 REVIEW_PASS"的 fixture 断言直接过。
 
 ## Task 5: review 上下文改为有界 diff
 

@@ -167,3 +167,24 @@ ANALYZE_STATUS=DONE
 - 更快：以"被消灭的等待"为证据（超时哑弹导致的挂死时长、瞬时故障吃掉的轮次时长）。
 - 功能一致：既有 11 个 smoke 全绿 + CLI/env/遥测 schema 向后兼容断言。
 → 落地为 Task 11。
+
+## 11. 追加根因 P10：状态/裁决解析未锚定，被日志正文里"提到"的标记名欺骗（已实测，最严重）
+
+实测（2026-08-14 00:25，run `autopilot-cost-latency-20260814-002419`）：implement worker 在 67s 处被**截断**（327B，代码一行没写），其正文最后一句是
+`- Add verdict marker check (REVIEW_PASS/REVIEW_FAIL/**Status:** DONE/**Status:** BLOCKED) before transport`
+结果：`parse-status.sh` 用 `grep -ioE 'status[^A-Za-z]*(DONE|BLOCKED|...)' | tail -1` **全文匹配**，取到句中的 `Status:** BLOCKED` → 报告"worker 明确 BLOCKED"；而实际上 worker 什么结论都没给。同一句话也让 `classify-outcome.sh`（D18 新增的标记优先规则）判成 `OK`。**两个解析器被同一行文字同时骗过。**
+
+同类隐患：`run-track-a.sh:239` 的 `parse_review() { grep -ioE 'REVIEW_(PASS|FAIL)' "$1" | tail -1; }` 也是全文匹配 —— 而 review prompt 自身就写着 `REVIEW_PASS # 无 CRITICAL/MAJOR` 与 `REVIEW_FAIL # 有 CRITICAL/MAJOR`，reviewer 一旦复述指令或两者都列，`tail -1` 就可能取到错的那个，**把通过判成不通过、或反之**。
+
+**危害**：这是"假 BLOCKED"的制造机 —— 截断（本应重试、几乎零成本）被误判成"真失败"（停机等人工 / 或触发 fixer 白跑一轮）。在无人值守下直接决定流程走向，比 P7/P9 更致命。
+
+**决策 D19（三处解析统一锚定，缺一不可）**：
+1. **只在末尾窗口内找**：仅检查日志**最后 15 行**（`tail -15`）。worker 的结论按约定必须在回复末尾，正文中段的提及一律不算。
+2. **必须行首锚定 + 整行成立**：
+   - Status：`^[[:space:]]*(\*\*)?Status(\*\*)?[:：][[:space:]]*(\*\*)?(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)` —— 即该行必须**以** Status 开头（允许前导空格与星号），不接受出现在句子中间。
+   - 裁决：`^[[:space:]]*(\*\*)?REVIEW_(PASS|FAIL)(\*\*)?[[:space:]]*$` —— 必须**独占一行**（允许星号/空格），不接受行内夹带说明文字（`REVIEW_PASS # 注释` 这种在 prompt 模板里出现过，必须判不成立）。
+3. 末尾窗口内无锚定标记 → `UNKNOWN`（交给按字节数的 EMPTY/TRANSPORT 分类去处理 = 重试），**不得**回退成全文 grep。
+4. `classify-outcome.sh` 的 D18 规则 2 同步改为"锚定标记"判定（用同一套正则，建议抽成 `scripts/parse-markers.sh` 单一实现，三处共用，避免正则三份漂移）。
+5. **判别样例（必须进 smoke）**：① 上述真实截断日志原文（行内提及 4 个标记名，末尾无锚定标记）→ `parse-status.sh` 必须输出 `UNKNOWN`、`classify-outcome.sh` 必须输出 `EMPTY`（**不是** BLOCKED / OK）；② 正常结尾 `**Status:** DONE` 独占一行 → `DONE`；③ 日志正文中段有 `**Status:** DONE` 但末 15 行没有 → `UNKNOWN`；④ 末行为 `REVIEW_PASS` → `REVIEW_PASS`；⑤ 末行为 `REVIEW_PASS   # 无 CRITICAL/MAJOR`（prompt 模板原文）→ **不成立** → `UNKNOWN`；⑥ 末尾同时有 `REVIEW_FAIL` 行与更靠后的 `REVIEW_PASS` 行 → 取最后一个 = `REVIEW_PASS`。
+
+**同时记录一个环境事实（非本 plugin 缺陷，但决定重试策略）**：`qodercli --help` 中**不存在**任何 idle / stream / 超时相关开关，无法调高那个 60s 空闲断流阈值；worker 被截断只能靠"分类 + 重试"消化，这进一步抬高了 D18/D19 与 Task 4 的优先级。
