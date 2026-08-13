@@ -19,7 +19,7 @@
 
 ## Task 1: 故障分类纯函数 + 统一回归门
 
-**Status**: IN_PROGRESS
+**Status**: BLOCKED
 
 落地 spec D1/D15。
 
@@ -242,5 +242,6 @@
    - 三个 prompt builder 的产物都含第 3 条的禁令关键词（用 TestModel dry 跑一轮取 prompt 文件断言）。
    - 遥测隔离：`NEIL_AUTOPILOT_LOG_DIR=<临时目录> AUTOPILOT_RUN_ID=real-xyz bash scripts/smoke-dispatch.sh` 后，临时目录里的 jsonl **不得**出现 `real-xyz`。
 7. 不得放宽或删除现有 14 个 smoke 的任何断言。
+8. **自指陷阱（必须一并处理，否则本 Task 自己验不过）**：本 Task 的 `**Verify**` 由 worker 执行，worker 环境里 `AUTOPILOT_ROLE=worker` 已被 dispatch.sh 导出；而 `smoke-run-track-a.sh` / `smoke-run-autopilot.sh` / `smoke-dispatch.sh` 内部会调真实编排脚本，必然命中第 1/2 条新护栏。⟹ 这三个 smoke 在**自身脚本开头**显式 `export AUTOPILOT_ALLOW_NESTED=1` 并 `unset AUTOPILOT_ROLE`，使其无论从控制器会话还是从 worker 内部运行都能通过。`smoke-recursion-guard.sh` 是例外：它要断言护栏生效，必须在**子 shell 里显式重设** `AUTOPILOT_ROLE=worker` 且**不带** `AUTOPILOT_ALLOW_NESTED`，不得依赖继承环境。
 
 **Verify**: `bash scripts/smoke-all.sh`
