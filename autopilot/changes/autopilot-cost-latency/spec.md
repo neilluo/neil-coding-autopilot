@@ -142,3 +142,28 @@ ANALYZE_STATUS=DONE
 实测事实：① `~/.qoder/skills/` 下 `_shared`、`autopilot-*`、`neil-coding-autopilot`、`using-neil-autopilot` **全部是软链到本仓** → 改仓库即实时改掉当前会话与所有 worker 加载的 skill；② `AUTOPILOT_ROLE=worker` 目前**仅**用于 hooks 写权限白名单，全仓无任何递归防护；③ worker prompt 未禁止调用 autopilot skill / 执行编排脚本；④ `run-track-a.sh` 无并发锁（同一 change-dir 可并行多实例）；⑤ **env 穿透已实测**：worker 跑 `smoke-all.sh` → 内部 `dispatch.sh(TestModel)` 继承 `AUTOPILOT_RUN_ID`，42 条 fixture 事件被记进真实 run `autopilot-cost-latency-20260813-225354`，污染成本统计。
 
 今日 worker 日志全量 grep `Skill(` / `run-track-a.sh --change-dir` = **空**，即嵌套尚未真实发生；但通道齐备（bypass_permissions + cwd 在插件仓 + 任务文本满是 autopilot 关键词），一旦 worker 决定调 skill 即无限递归、指数烧 token。→ 见 Task 10。
+
+## 9. 追加根因 P9：分类器把「实质输出」误判为 TRANSPORT（自指式误伤，已实测）
+
+实测：`classify-outcome.sh 1 /tmp/probe-3.log` → `TRANSPORT`，而该日志是 2035 字节的**真实 CR 正文、末尾 `REVIEW_PASS`**。命中原因是正文里逐字出现 `Unable to connect` —— 因为这次 CR 审的就是那张传输层正则表本身。`smoke-classify-outcome.sh` 的 APP fixture 恰好不含任何传输关键词，所以断言全绿却漏掉真实场景。
+
+**危害（必须在 Task 4 之前修）**：Task 4 让 TRANSPORT 类"重试且不扣轮次"。一旦真正的 `REVIEW_FAIL` 正文里出现任一传输关键词（在本仓库里几乎必然，因为代码和文档到处写这些词），就会被当成抖动**无限重试**，既拿不到修复也持续烧 token —— 与本次治理目标完全相反。
+
+**决策 D18（覆盖 Task 1 原判定顺序）**：先判"有没有实质结论"，再判传输特征。新顺序：
+1. `exit_code ∈ {124,137}` → `TIMEOUT`
+2. **（新）日志含裁决/自述标记** —— `REVIEW_PASS` / `REVIEW_FAIL` / `**Status:** DONE` / `**Status:** BLOCKED` —— 说明 worker 真的产出了结论 ⟹ `exit_code==0` 则 `OK`，否则 `APP`。**永不**归为 TRANSPORT/EMPTY。
+3. 传输层正则：仅当**日志字节数 < `AUTOPILOT_TRANSPORT_LOG_BYTES`（默认 4096）**且只对**末 20 行**匹配时才判 `TRANSPORT`（抖动的特征是"短且以错误收尾"，而非"正文提到过这些词"）
+4. `exit_code != 0` 且字节数 < `AUTOPILOT_EMPTY_LOG_BYTES`(300) → `TRANSPORT`
+5. `exit_code == 0` 且字节数 < 同阈值 → `EMPTY`
+6. `exit_code != 0` → `APP`
+7. 否则 → `OK`
+
+**判别样例（必须进 smoke，缺一不可）**：① `exit 1` + >300B CR 正文且**逐字包含 `Unable to connect`** + `REVIEW_FAIL` → 必须 `APP`；② 短日志仅 `Unable to connect.` → 仍 `TRANSPORT`；③ 6KB 正文其**末 20 行**含 `502 Bad Gateway`、但无裁决标记 → `APP`（超长度门，不算抖动）；④ 250B 且含 `**Status:** DONE`、`exit 0` → `OK`（不得因为短就判 EMPTY）。
+
+## 10. 目标验收（用户目标的可证伪化）
+
+用户目标三条：**省 token、更快、功能与以前一致**。全部要求**离线可测**，不靠"感觉"：
+- 省 token：以结构性削减量为证据（review 上下文字节、SKILL.md 注入字节、避免的重跑次数），并用今日真实遥测做重放推算。
+- 更快：以"被消灭的等待"为证据（超时哑弹导致的挂死时长、瞬时故障吃掉的轮次时长）。
+- 功能一致：既有 11 个 smoke 全绿 + CLI/env/遥测 schema 向后兼容断言。
+→ 落地为 Task 11。

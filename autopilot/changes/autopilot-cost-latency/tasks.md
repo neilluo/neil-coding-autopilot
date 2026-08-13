@@ -41,6 +41,10 @@
 
 **Verify**: `bash scripts/smoke-all.sh`
 
+## Task 1 增补（D18，随 Task 1 一起完成，Task 1 未含此项即视为未完成）
+
+9. **按 spec §9 的 D18 重排判定顺序**并补齐四个判别样例（①②③④ 全部进 `smoke-classify-outcome.sh`）。要点：新增"裁决/自述标记优先"规则（`REVIEW_PASS`/`REVIEW_FAIL`/`**Status:** DONE`/`**Status:** BLOCKED`）；传输层正则加**长度门** `AUTOPILOT_TRANSPORT_LOG_BYTES`（默认 4096）且**只匹配末 20 行**（用 `tail -20`）。已实测反例：`classify-outcome.sh 1 /tmp/probe-3.log` 当前错判 TRANSPORT，正确答案是 `APP`——修完必须亲自跑这条验证（该文件若已不存在，就用同样特征自造 fixture）。
+
 ## Task 2: telemetry 扩展（token 字段 + 默认值调整）
 
 **Status**: PENDING
@@ -245,3 +249,24 @@
 8. **自指陷阱（必须一并处理，否则本 Task 自己验不过）**：本 Task 的 `**Verify**` 由 worker 执行，worker 环境里 `AUTOPILOT_ROLE=worker` 已被 dispatch.sh 导出；而 `smoke-run-track-a.sh` / `smoke-run-autopilot.sh` / `smoke-dispatch.sh` 内部会调真实编排脚本，必然命中第 1/2 条新护栏。⟹ 这三个 smoke 在**自身脚本开头**显式 `export AUTOPILOT_ALLOW_NESTED=1` 并 `unset AUTOPILOT_ROLE`，使其无论从控制器会话还是从 worker 内部运行都能通过。`smoke-recursion-guard.sh` 是例外：它要断言护栏生效，必须在**子 shell 里显式重设** `AUTOPILOT_ROLE=worker` 且**不带** `AUTOPILOT_ALLOW_NESTED`，不得依赖继承环境。
 
 **Verify**: `bash scripts/smoke-all.sh`
+
+## Task 11: 目标验收 — 成本/时延削减量测量 + 功能一致性审计
+
+**Status**: PENDING
+
+落地 spec §10。**只允许离线、确定性、零 token 的测量**（禁止为测量去发真实模型请求）。
+
+1. 新建 `scripts/bench-compare.sh`，输出一张 markdown 表到 stdout 并写入 `autopilot/changes/autopilot-cost-latency/bench-report.md`，包含三组硬数字：
+   - **review 上下文削减**：对本次变更涉及的每个 Task，算「旧口径」= 变更文件全文字节之和（`git show`/工作区读全文，即旧 `build_review_prompt` 让 reviewer 逐一读完的量）；「新口径」= Task 5 落地的有界 diff 字节数（调用其真实实现，不要复刻逻辑）。给出每 Task 与合计的字节数与削减百分比。
+   - **SKILL.md 注入削减**：`git show master:skills/using-neil-autopilot/SKILL.md | wc -c` vs 当前 `wc -c`，以及 `skills/*/SKILL.md` 合计；给出百分比。
+   - **重跑浪费的重放推算**：读 `${NEIL_AUTOPILOT_LOG_DIR}/runs/*.jsonl`（默认路径按 Task 7 结论），统计历史上 `stage=review|fix` 且被判为 TRANSPORT/EMPTY/TIMEOUT 的 dispatch 事件数与其 `duration_s` 合计，再统计因轮次耗尽导致的 `--resume` 重跑（同一 run_id 前缀出现多个 run 目录 / outcome=blocked 后又有同 change 的新 run）所重复消耗的 `implement` 时长合计。这两项即"新版本可避免的墙钟浪费"。**取不到数据时打印 `NO-DATA` 而不是编造 0**。
+2. 新建 `scripts/smoke-backward-compat.sh`（功能一致性门禁），断言：
+   - **CLI 兼容**：`run-track-a.sh` 与 `run-autopilot.sh` 的 `--change-dir/--cwd/--dry-run/--resume/--max-rounds/--impl-model/--review-model` 全部仍被接受（用 `--dry-run` + TestModel 实跑，rc=0）；`--help` 仍列出它们。
+   - **env 兼容**：`AUTOPILOT_PLATFORM/AUTOPILOT_TIMEOUT/AUTOPILOT_IMPLEMENTER_MODEL/AUTOPILOT_REVIEWER_MODEL/AUTOPILOT_STAGE/AUTOPILOT_RUN_ID/AUTOPILOT_ROLE/NEIL_AUTOPILOT_LOG_DIR` 仍被读取且语义未变（对每个变量做一次可观测断言，例如设 `AUTOPILOT_TIMEOUT=1` 后 dispatch 一个 sleep 型 TestModel 应得 TIMEOUT 语义）。
+   - **遥测 schema 只增不减**：`git show master:scripts/telemetry.sh` 里 dispatch 事件的字段名集合，必须是当前字段名集合的**子集**（新增允许，删改即失败）；且用 `jq -e` 断言当前产出的一条 dispatch 事件仍能被"只认旧字段"的消费者解析。
+   - **行为变更白名单**：唯一允许的默认值变更是 `AUTOPILOT_REVIEWER_MODEL` 由 `Ultimate` → `Performance`（D16）与 `NEIL_AUTOPILOT_LOG_DIR` 新默认（Task 7）。断言 `AGENTS.md` 中这两项都有显式记载（`grep`）；若还有第三处默认值变更而未登记 → 失败。
+   - **入口未消失**：`scripts/` 下 master 版本存在的每个 `*.sh` 在当前版本**仍存在**（可以新增，不许删）。
+3. `scripts/smoke-all.sh` 自动纳入上面两个新 smoke（它按 `smoke-*.sh` 通配，确认无需改）。
+4. 把 `bench-report.md` 的结论摘要（三组数字 + 一句结论）追加进 `autopilot/changes/autopilot-cost-latency/summary.md`（文件不存在则创建）。
+
+**Verify**: `bash scripts/smoke-all.sh && bash scripts/bench-compare.sh && test -s autopilot/changes/autopilot-cost-latency/bench-report.md`
