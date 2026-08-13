@@ -7,6 +7,7 @@
 
 ## 全局铁律（所有 Task 都适用，开工前连同 spec 一起读）
 
+0. **先落盘、再解释（最高优先级执行纪律）**：拿到任务后**立刻**用 Write/Edit 把文件写出来，**禁止**先输出长篇分析或"让我先读一下…"式的铺垫。实测教训：环境存在约 60s 的空闲断流，worker 在分析阶段被掐断已连续发生 4 次（3~5 分钟、0 文件落盘）。解释压缩到最后一两句。回复**末尾必须有独占一行**的 `**Status:** DONE`（或 `**Status:** BLOCKED`），行内不得夹带其它文字——解析器只认末 15 行里行首锚定的这一行。
 0. **不得修改本文件的 `**Verify**` 行，不得为过关放水**：禁止删除/弱化既有 smoke 断言、禁止给 smoke 加 `exit 0` 兜底、禁止把断言改成 `|| true`。验证命令本身有问题 ⟹ 回复里说明并输出 `**Status:** BLOCKED`，不要自己改计划。
 1. **基线**：改动前 11 个 smoke 全绿（`smoke-dispatch/run-track-a/run-autopilot/telemetry/guard/bash-guard/daily-analysis/archive-change/kb-path/kb-search/migrate-archive-layout`）。**一个都不许弄挂**。
 2. **bash 3.2 + BSD 工具**（macOS stock，见 AGENTS.md）：禁关联数组、`mapfile`、`grep -P`、`readlink -f`、GNU-only `sed -i` 无后缀；`sed -i.bak` + `rm -f *.bak`；`stat` 用双分支（`stat -f '%m'` / `stat -c '%Y'`）。所有脚本 `set -euo pipefail` + `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"` 自定位。
@@ -17,40 +18,44 @@
 7. **不引入 Task 描述外的功能**；异常不静默吞（catch 后必须打日志或返回非零）。
 8. **自修改注意**：本仓库的 `scripts/run-track-a.sh` 正被一个**冻结快照**执行（控制器从 `$TMPDIR` 跑），你改的是仓库副本，改动下次运行才生效——这是预期行为，不要试图"让它立刻生效"，也不要在 Verify 里去跑真实 loop。
 
-## Task 1: 故障分类纯函数 + 统一回归门
+## Task 1: parse-markers.sh —— 锚定式状态/裁决解析（单文件，正则已给死）
 
-**Status**: BLOCKED
+**Status**: PENDING
 
-落地 spec D1/D15。
+**只做一件事**：新建 `scripts/parse-markers.sh`。不要改任何其它文件。**正则已实测通过 7 条 fixture，照抄，不要自己重写。**
 
-1. 新建 `scripts/classify-outcome.sh`：
-   - 用法 `classify-outcome.sh <exit_code> <log_file>`，stdout 输出**恰好一个词**：`OK` / `TRANSPORT` / `TIMEOUT` / `EMPTY` / `APP`；退出码恒 0（分类器不因分类结果失败）。
-   - 判定顺序（**必须按此序**，先命中先返回）：
-     1. `exit_code` ∈ {124, 137} → `TIMEOUT`
-     2. 日志（不存在按空处理）匹配传输层错误正则（大小写不敏感）→ `TRANSPORT`：`unable to connect`、`response body idle timeout`、`typo in the url or port`、`econnreset`、`econnrefused`、`etimedout`、`socket hang up`、`fetch failed`、`network error`、`tls handshake`、`too many requests`、`rate limit`、`502 bad gateway`、`503 service unavailable`、`504 gateway timeout`
-     3. `exit_code != 0` 且日志字节数 < `${AUTOPILOT_EMPTY_LOG_BYTES:-300}` → `TRANSPORT`（无实质输出的失败，按抖动处理）
-     4. `exit_code == 0` 且日志字节数 < 同阈值 → `EMPTY`
-     5. `exit_code != 0` → `APP`
-     6. 否则 → `OK`
-   - 正则清单集中成一个变量便于扩展；用 `grep -qiE`（**不用** `-P`）。
-2. 新建 `scripts/smoke-classify-outcome.sh`：对上面 6 条分支逐一造 fixture 断言，**必含判别样例**：`exit 1` + 一段 >300B 的真实 CR 文本（含 `REVIEW_FAIL` 与 `scripts/foo.sh:42`）→ 必须是 `APP`（不是 `TRANSPORT`）；`exit 1` + 短文本 `Unable to connect.` → `TRANSPORT`。再加边界：日志文件不存在、日志恰好 300B、exit 137。
-3. 新建 `scripts/smoke-all.sh`：
-   - 顺序跑 `scripts/smoke-*.sh`（按文件名排序，**排除自身**），每个用 `bash` 执行；打印 `PASS/FAIL` 与耗时；**fail-fast**（首个失败即 exit 1 并回显该 smoke 的最后 30 行输出）；全绿 exit 0。
-   - 支持 `--only <pattern>`（子串过滤）与 `--list`。
-   - 不得并行（避免共享 TMPDIR 竞态）。
-
-**Verify**: `bash scripts/smoke-all.sh`
-
-### Task 1 增补（D18，随 Task 1 一起完成，Task 1 未含此项即视为未完成）
-
-9. **按 spec §9 的 D18 重排判定顺序**并补齐四个判别样例（①②③④ 全部进 `smoke-classify-outcome.sh`）。要点：新增"裁决/自述标记优先"规则（`REVIEW_PASS`/`REVIEW_FAIL`/`**Status:** DONE`/`**Status:** BLOCKED`）；传输层正则加**长度门** `AUTOPILOT_TRANSPORT_LOG_BYTES`（默认 4096）且**只匹配末 20 行**（用 `tail -20`）。已实测反例：`classify-outcome.sh 1 /tmp/probe-3.log` 当前错判 TRANSPORT，正确答案是 `APP`——修完必须亲自跑这条验证（该文件若已不存在，就用同样特征自造 fixture）。
-
-10. **按 spec §11 的 D19 落地"锚定解析"**：新建 `scripts/parse-markers.sh` 作为**唯一实现**（供 classify-outcome.sh / parse-status.sh / run-track-a.sh 共用，禁止各写一份正则）。接口：`parse-markers.sh status <log>` → `DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|UNKNOWN`；`parse-markers.sh review <log>` → `REVIEW_PASS|REVIEW_FAIL|UNKNOWN`。规则严格按 D19 第 1/2/3 条（末 15 行 + 行首锚定 + 裁决须独占一行）。`classify-outcome.sh` 的规则 2 改为调用它。所有 D19 第 5 条的六个判别样例进 `smoke-classify-outcome.sh`（或新建 `scripts/smoke-parse-markers.sh`，两者皆可，但六条必须全在）。**造 fixture ① 时直接复制这段真实截断文本**：
+```bash
+#!/usr/bin/env bash
+# 锚定式解析 worker 输出的 Status / CR 裁决（spec §11 D19 的唯一实现）
+# 用法: parse-markers.sh status|review <log-file>
+# 输出: status → DONE|DONE_WITH_CONCERNS|BLOCKED|NEEDS_CONTEXT|UNKNOWN
+#       review → REVIEW_PASS|REVIEW_FAIL|UNKNOWN
+# 规则: 只看末 15 行；Status 须行首锚定；裁决须独占一行。文件缺失/无匹配 → UNKNOWN。
+set -uo pipefail
+MODE="${1:-}"; FILE="${2:-}"
+WINDOW="${AUTOPILOT_MARKER_WINDOW:-15}"
+if [ -z "$MODE" ] || [ -z "$FILE" ]; then echo "usage: parse-markers.sh status|review <log>" >&2; exit 2; fi
+if [ ! -f "$FILE" ]; then echo "UNKNOWN"; exit 0; fi
+case "$MODE" in
+  status)
+    M="$(tail -"$WINDOW" "$FILE" 2>/dev/null \
+      | grep -oE '^[[:space:]]*\**[Ss]tatus\**[:：]\**[[:space:]]*\**(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)' \
+      | tail -1 | grep -oE '(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)' | tail -1 || true)"
+    ;;
+  review)
+    M="$(tail -"$WINDOW" "$FILE" 2>/dev/null \
+      | grep -oE '^[[:space:]]*\**REVIEW_(PASS|FAIL)\**[[:space:]]*$' \
+      | tail -1 | grep -oE 'REVIEW_(PASS|FAIL)' | tail -1 || true)"
+    ;;
+  *) echo "usage: parse-markers.sh status|review <log>" >&2; exit 2 ;;
+esac
+[ -n "$M" ] && echo "$M" || echo "UNKNOWN"
+exit 0
 ```
-Now I have a clear picture. The existing `classify-outcome.sh` needs D18 changes:
-- Add verdict marker check (REVIEW_PASS/REVIEW_FAIL/**Status:** DONE/**Status:** BLOCKED) before transport
-```
 
+要求：`chmod +x`；**退出码恒 0**（除用法错误 = 2）；不引入 GNU-only 语法（BSD grep 可跑）。
+
+**Verify**: `chmod +x scripts/parse-markers.sh && printf 'x\n**Status:** DONE\n' > /tmp/pm1 && [ "$(bash scripts/parse-markers.sh status /tmp/pm1)" = DONE ] && printf 'see (**Status:** DONE/**Status:** BLOCKED) here\n' > /tmp/pm2 && [ "$(bash scripts/parse-markers.sh status /tmp/pm2)" = UNKNOWN ] && printf 'REVIEW_PASS\n' > /tmp/pm3 && [ "$(bash scripts/parse-markers.sh review /tmp/pm3)" = REVIEW_PASS ] && printf 'REVIEW_PASS   # 无 CRITICAL/MAJOR\n' > /tmp/pm4 && [ "$(bash scripts/parse-markers.sh review /tmp/pm4)" = UNKNOWN ] && [ "$(bash scripts/parse-markers.sh status /tmp/nonexistent-pm)" = UNKNOWN ] && bash scripts/smoke-all.sh`
 
 ## Task 2: telemetry 扩展（token 字段 + 默认值调整）
 
@@ -283,3 +288,46 @@ Now I have a clear picture. The existing `classify-outcome.sh` needs D18 changes
 4. 把 `bench-report.md` 的结论摘要（三组数字 + 一句结论）追加进 `autopilot/changes/autopilot-cost-latency/summary.md`（文件不存在则创建）。
 
 **Verify**: `bash scripts/smoke-all.sh && bash scripts/bench-compare.sh && test -s autopilot/changes/autopilot-cost-latency/bench-report.md`
+
+## Task 12: smoke-parse-markers.sh —— D19 六条判别样例
+
+**Status**: PENDING
+
+**只做一件事**：新建 `scripts/smoke-parse-markers.sh`（不改其它文件）。用 fixture 逐条断言 `scripts/parse-markers.sh`，六条**全部必须有**（spec §11 D19 第 5 条）：
+
+1. 真实截断日志（正文行内提及四个标记名、末尾无锚定行）→ `status` 得 `UNKNOWN`。fixture 正文直接用：
+   `- Add verdict marker check (REVIEW_PASS/REVIEW_FAIL/**Status:** DONE/**Status:** BLOCKED) before transport`
+2. 末尾 `**Status:** DONE` 独占一行 → `DONE`。
+3. 正文中段有 `**Status:** DONE`，但其后追加 20 行无关内容（挤出末 15 行窗口）→ `UNKNOWN`。
+4. 末行 `REVIEW_PASS` → `REVIEW_PASS`。
+5. 末行 `REVIEW_PASS   # 无 CRITICAL/MAJOR` → `UNKNOWN`（行内夹带说明不成立）。
+6. 末尾先 `REVIEW_FAIL` 行、后 `REVIEW_PASS` 行 → 取最后 = `REVIEW_PASS`。
+
+再加两条边界：文件不存在 → `UNKNOWN` 且退出码 0；中文冒号 `Status：DONE` → `DONE`。
+风格对齐现有 smoke（`set -euo pipefail`、临时目录 `mktemp -d` + trap 清理、失败打印期望/实际并 exit 1、全绿打印 PASS）。开头 `unset AUTOPILOT_RUN_ID`（避免污染真实遥测）。
+
+**Verify**: `bash scripts/smoke-parse-markers.sh && bash scripts/smoke-all.sh`
+
+## Task 13: classify-outcome.sh 改用锚定解析 + D18 长度门
+
+**Status**: PENDING
+
+**只改两个文件**：`scripts/classify-outcome.sh` 与 `scripts/smoke-classify-outcome.sh`。
+
+1. `classify-outcome.sh` 判定顺序按 spec §9 D18（已被 §11 D19 修订）重排：
+   1) `exit_code ∈ {124,137}` → `TIMEOUT`
+   2) **调 `scripts/parse-markers.sh`**（同目录，用 `$(dirname "$0")` 定位）：`status` 或 `review` 任一得到非 `UNKNOWN` ⟹ `exit_code==0` 则 `OK`，否则 `APP`。**不得**自己写正则。
+   3) 传输层正则：仅当 `日志字节数 < ${AUTOPILOT_TRANSPORT_LOG_BYTES:-4096}` 且只对 `tail -20` 匹配 → `TRANSPORT`
+   4) `exit_code != 0` 且字节数 < `${AUTOPILOT_EMPTY_LOG_BYTES:-300}` → `TRANSPORT`
+   5) `exit_code == 0` 且字节数 < 同阈值 → `EMPTY`
+   6) `exit_code != 0` → `APP`
+   7) 否则 → `OK`
+   保持原 CLI 契约：`classify-outcome.sh <exit_code> <log>`、stdout 恰好一个词、退出码恒 0。
+2. `smoke-classify-outcome.sh` 保留全部既有断言，**新增四条判别样例**：
+   - `exit 1` + >300B CR 正文且**逐字含 `Unable to connect`** + 末行 `REVIEW_FAIL` → `APP`（旧实现在此错判 TRANSPORT）
+   - 短日志仅 `Unable to connect.` → 仍 `TRANSPORT`
+   - 6KB 正文、其 `tail -20` 内含 `502 Bad Gateway`、无锚定标记 → `APP`（超长度门）
+   - 250B 且末行 `**Status:** DONE`、`exit 0` → `OK`（短但有结论，不得判 EMPTY）
+3. 开头 `unset AUTOPILOT_RUN_ID`。
+
+**Verify**: `bash scripts/smoke-classify-outcome.sh && bash scripts/smoke-all.sh`
