@@ -5,6 +5,7 @@
 # USAGE: smoke-review-context.sh [-h|--help]
 # EXIT CODES: 0=all assertions pass, 1=one or more assertions failed
 set -uo pipefail
+unset AUTOPILOT_RUN_ID
 
 case "${1:-}" in
   -h|--help)

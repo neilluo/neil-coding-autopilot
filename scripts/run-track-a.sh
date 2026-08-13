@@ -39,6 +39,11 @@
 
 set -euo pipefail
 
+if [ "${AUTOPILOT_ROLE:-}" = worker ] && [ "${AUTOPILOT_ALLOW_NESTED:-}" != 1 ]; then
+  echo "ERROR: nested autopilot run refused (AUTOPILOT_ROLE=worker)" >&2
+  exit 2
+fi
+
 # ── self-locate (macOS-safe; not readlink -f) ────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DISPATCH="$SCRIPT_DIR/dispatch.sh"
@@ -92,6 +97,42 @@ CHANGE_DIR="$(cd "$CHANGE_DIR" 2>/dev/null && pwd -P || printf %s "$CHANGE_DIR")
 case "$MAX_ROUNDS" in ''|*[!0-9]*) echo "ERROR: --max-rounds must be a positive integer" >&2; exit 1;; esac
 [ "$MAX_ROUNDS" -ge 1 ] || { echo "ERROR: --max-rounds must be >= 1" >&2; exit 1; }
 
+# ── per-change atomic lock ───────────────────────────────────────────────────
+LOCK_DIR="$CHANGE_DIR/.lock"
+LOCK_OWNED=false
+acquire_lock() {
+  local holder_pid="" lock_epoch="" now age
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    LOCK_OWNED=true
+  else
+    [ -f "$LOCK_DIR/pid" ] && holder_pid="$(sed -n '1p' "$LOCK_DIR/pid" 2>/dev/null || true)"
+    [ -f "$LOCK_DIR/epoch" ] && lock_epoch="$(sed -n '1p' "$LOCK_DIR/epoch" 2>/dev/null || true)"
+    now="$(date +%s)"
+    case "$lock_epoch" in ''|*[!0-9]*) age=43200 ;; *) age=$(( now - lock_epoch )) ;; esac
+    if [ -n "$holder_pid" ] && kill -0 "$holder_pid" 2>/dev/null && [ "$age" -lt 43200 ]; then
+      echo "ERROR: Track A lock held by active PID $holder_pid" >&2
+      exit 2
+    fi
+    rm -rf "$LOCK_DIR" 2>/dev/null || true
+    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+      echo "ERROR: unable to acquire Track A lock: $LOCK_DIR" >&2
+      exit 2
+    fi
+    LOCK_OWNED=true
+  fi
+  printf '%s\n' "$$" > "$LOCK_DIR/pid"
+  date +%s > "$LOCK_DIR/epoch"
+}
+release_lock() {
+  local lock_pid=""
+  if $LOCK_OWNED; then
+    [ -f "$LOCK_DIR/pid" ] && lock_pid="$(sed -n '1p' "$LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ "$lock_pid" = "$$" ]; then rm -rf "$LOCK_DIR" 2>/dev/null || true; fi
+    LOCK_OWNED=false
+  fi
+}
+acquire_lock
+
 trap 'echo "[run-track-a] interrupted" >&2; exit 130' INT TERM
 
 # ── logging (LOG_DIR only when actually running) ─────────────────────────────
@@ -140,7 +181,7 @@ copy_artifact() {
 #    as-is so its own `exit 130` behaviour is preserved and simply flows into
 #    this EXIT trap too, which is how the "interrupted" outcome gets recorded).
 _emit_run_event_on_exit() {
-  local rc=$?
+  local rc="${1:-$?}"
   {
     if [ -n "${RUN_ID:-}" ]; then
       local outcome="complete" dur=0
@@ -154,7 +195,14 @@ _emit_run_event_on_exit() {
     fi
   } 2>/dev/null || true
 }
-trap '_emit_run_event_on_exit' EXIT
+_run_track_a_on_exit() {
+  local rc=$?
+  trap - EXIT
+  _emit_run_event_on_exit "$rc"
+  release_lock
+  exit "$rc"
+}
+trap '_run_track_a_on_exit' EXIT
 
 # ── tasks.md parsing helpers (bash-3.2 / BSD-tool safe) ──────────────────────
 task_block() {  # print the markdown block for "## Task N:" up to next task or ---
@@ -248,6 +296,10 @@ build_impl_prompt() {
     echo; echo "## 代码规范"
     echo "- 遵循被开发项目自身规范：动手前读 AGENTS.md / autopilot/knowledge/SCHEMA.md / wiki/guides/*（存在才读）。"
     echo "- 不引入 Task 描述外的功能；错误/异常不静默吞。"
+    echo; echo "## 递归安全禁令"
+    echo "- 禁止调用任何 autopilot-* / using-neil-autopilot / neil-coding-autopilot skill"
+    echo "- 禁止执行 run-track-a.sh / run-autopilot.sh / dispatch.sh"
+    echo "- 只做本 Task 描述的事"
     echo; echo "## 报告格式（回复末尾必须输出）"
     echo "- **Status:** DONE | BLOCKED"
     echo "- **Files changed:** [列表]"
@@ -267,6 +319,10 @@ build_fix_prompt() {
     echo '```'
     echo; echo "## 执行要求"
     echo "- 只修上述问题；改完重跑验证命令确认通过；不引入新功能。"
+    echo; echo "## 递归安全禁令"
+    echo "- 禁止调用任何 autopilot-* / using-neil-autopilot / neil-coding-autopilot skill"
+    echo "- 禁止执行 run-track-a.sh / run-autopilot.sh / dispatch.sh"
+    echo "- 只做本 Task 描述的事"
     echo; echo "## 报告格式（回复末尾必须输出）"
     echo "- **Status:** DONE | BLOCKED"
   } > "$out"
@@ -281,6 +337,10 @@ build_review_prompt() {
     echo "- 通用：安全（注入/硬编码密钥）、逻辑正确性（空值/边界/资源泄漏/吞错）、健壮性（超时/兜底/失败日志）、可维护性。"
     echo "- 项目特定：读 AGENTS.md / autopilot/knowledge/SCHEMA.md / wiki/guides/*（存在才读），把其中强制规则当 Major 检查项。"
     echo "- 可观测验收（本 Task 若改动用户可观测输出——UI/CLI/API/告警/报表）：读 $CHANGE_DIR/spec.md 的「可观测验收」段 + $SCRIPT_DIR/../skills/_shared/observable-acceptance.md，核验 ① 每个改动的可观测值/态有 SSOT + 判别性蜕变关系（多源值扰动非权威源期望不同）；② 下方本 Task 块的 Verify 为确定性扰动测试（非仅编译级）且期望可追溯到 spec 的 MR；③ 标 UNVERIFIED-OBSERVABLE 者须确为无离线宿主的纯渲染层、否则免除无效。缺失/对不上/免除滥用 → MAJOR。纯内部改动（无可观测变化）跳过本维度。"
+    echo; echo "## 递归安全禁令"
+    echo "- 禁止调用任何 autopilot-* / using-neil-autopilot / neil-coding-autopilot skill"
+    echo "- 禁止执行 run-track-a.sh / run-autopilot.sh / dispatch.sh"
+    echo "- 只做本 Task 描述的事"
     echo; echo "## 本 Task 块（含 **Verify** 与可能的 UNVERIFIED-OBSERVABLE 标记，供 ②③ 交叉核验）"; echo
     [ -n "$n" ] && task_block "$n"
     echo; echo "## 结论（回复末尾必须输出其一）"

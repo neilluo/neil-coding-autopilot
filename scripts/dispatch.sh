@@ -25,6 +25,7 @@ INSTRUCTION=""
 CLI_TIMEOUT=""
 STAGE="${AUTOPILOT_STAGE:-other}"
 KILL_AFTER="${AUTOPILOT_KILL_AFTER_S:-30}"
+INHERITED_ROLE="${AUTOPILOT_ROLE:-}"
 
 usage() {
   echo "Usage: dispatch.sh --model MODEL --cwd DIR --prompt-file FILE --instruction TEXT [--timeout SECS]"
@@ -62,6 +63,10 @@ fi
 if [ ! -f "$PROMPT_FILE" ]; then
   echo "ERROR: Prompt file not found: $PROMPT_FILE" >&2
   exit 1
+fi
+if [ "$INHERITED_ROLE" = worker ] && [ "$MODEL" != TestModel ]; then
+  echo "ERROR: nested worker spawn refused" >&2
+  exit 2
 fi
 if [ "$PLATFORM" = auto ]; then PLATFORM="$(detect_platform)"; fi
 

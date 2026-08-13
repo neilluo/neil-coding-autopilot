@@ -3,6 +3,7 @@
 # USAGE: bash scripts/smoke-skill-invariants.sh
 # EXIT CODES: 0 when the real skill and mutation checks pass; 1 otherwise.
 set -u
+unset AUTOPILOT_RUN_ID
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"

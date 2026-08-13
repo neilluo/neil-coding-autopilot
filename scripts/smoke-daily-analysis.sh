@@ -15,6 +15,7 @@
 #
 # Usage: bash scripts/smoke-daily-analysis.sh   # 0 = all pass, 1 = failure.
 set -uo pipefail
+unset AUTOPILOT_RUN_ID
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 RUNNER="$SCRIPT_DIR/daily-analysis.sh"
@@ -94,7 +95,7 @@ run_daily() {  # $1=log_root; remaining args passed through to daily-analysis.sh
   local root="$1"; shift
   rm -f "$CALL_MARKER"
   PATH="$STUB_BIN:$PATH" AUTOPILOT_PLATFORM=qoder AUTOPILOT_TIMEOUT=20 \
-    NEIL_AUTOPILOT_LOG_DIR="$root" bash "$RUNNER" --date "$DATE" "$@"
+    AUTOPILOT_DAILY_MODEL=TestModel NEIL_AUTOPILOT_LOG_DIR="$root" bash "$RUNNER" --date "$DATE" "$@"
 }
 
 # ── scenario 1: fixture runs -> valid, correctly-aggregated metrics.json ─────

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Zero-token smoke coverage for scripts/dispatch.sh.
 set -euo pipefail
+unset AUTOPILOT_RUN_ID
+export AUTOPILOT_ALLOW_NESTED=1
+unset AUTOPILOT_ROLE
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DISPATCH="$SCRIPT_DIR/dispatch.sh"

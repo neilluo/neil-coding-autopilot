@@ -3,6 +3,7 @@
 # USAGE: smoke-all.sh [--only <pattern>] [--list]
 # EXIT CODES: 0 when selected smokes pass or are listed; 1 on usage or smoke failure.
 set -uo pipefail
+unset AUTOPILOT_RUN_ID
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SELF="$SCRIPT_DIR/$(basename "$0")"

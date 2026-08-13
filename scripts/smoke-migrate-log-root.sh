@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+unset AUTOPILOT_RUN_ID
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 TMP="$(mktemp -d)"

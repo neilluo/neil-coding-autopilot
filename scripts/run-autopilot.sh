@@ -46,6 +46,11 @@
 
 set -euo pipefail
 
+if [ "${AUTOPILOT_ROLE:-}" = worker ] && [ "${AUTOPILOT_ALLOW_NESTED:-}" != 1 ]; then
+  echo "ERROR: nested autopilot run refused (AUTOPILOT_ROLE=worker)" >&2
+  exit 2
+fi
+
 # ── self-locate (macOS-safe; not readlink -f) ────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 RUN_TRACK_A="$SCRIPT_DIR/run-track-a.sh"
