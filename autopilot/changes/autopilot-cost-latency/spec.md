@@ -181,10 +181,27 @@ ANALYZE_STATUS=DONE
 **决策 D19（三处解析统一锚定，缺一不可）**：
 1. **只在末尾窗口内找**：仅检查日志**最后 15 行**（`tail -15`）。worker 的结论按约定必须在回复末尾，正文中段的提及一律不算。
 2. **必须行首锚定 + 整行成立**：
-   - Status：`^[[:space:]]*(\*\*)?Status(\*\*)?[:：][[:space:]]*(\*\*)?(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)` —— 即该行必须**以** Status 开头（允许前导空格与星号），不接受出现在句子中间。
-   - 裁决：`^[[:space:]]*(\*\*)?REVIEW_(PASS|FAIL)(\*\*)?[[:space:]]*$` —— 必须**独占一行**（允许星号/空格），不接受行内夹带说明文字（`REVIEW_PASS # 注释` 这种在 prompt 模板里出现过，必须判不成立）。
+   - Status：`^[[:space:]]*\**[Ss]tatus\**[:：]\**[[:space:]]*\**(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)` —— 用 `\**`（零或多个星号）而**不是** `(\*\*)?`，因为真实格式是 `**Status:** DONE`（**冒号在两个星号之间**）；写成 `Status(\*\*)?[:：]` 会一条都匹配不到（已实测踩中）。该行必须以 Status 开头，行内提及一律不算。
+   - 裁决：`^[[:space:]]*\**REVIEW_(PASS|FAIL)\**[[:space:]]*$` —— 必须独占一行（允许星号/空格），行内夹带说明文字（如 prompt 模板里的 `REVIEW_PASS   # 无 CRITICAL/MAJOR`）判不成立。
 3. 末尾窗口内无锚定标记 → `UNKNOWN`（交给按字节数的 EMPTY/TRANSPORT 分类去处理 = 重试），**不得**回退成全文 grep。
 4. `classify-outcome.sh` 的 D18 规则 2 同步改为"锚定标记"判定（用同一套正则，建议抽成 `scripts/parse-markers.sh` 单一实现，三处共用，避免正则三份漂移）。
 5. **判别样例（必须进 smoke）**：① 上述真实截断日志原文（行内提及 4 个标记名，末尾无锚定标记）→ `parse-status.sh` 必须输出 `UNKNOWN`、`classify-outcome.sh` 必须输出 `EMPTY`（**不是** BLOCKED / OK）；② 正常结尾 `**Status:** DONE` 独占一行 → `DONE`；③ 日志正文中段有 `**Status:** DONE` 但末 15 行没有 → `UNKNOWN`；④ 末行为 `REVIEW_PASS` → `REVIEW_PASS`；⑤ 末行为 `REVIEW_PASS   # 无 CRITICAL/MAJOR`（prompt 模板原文）→ **不成立** → `UNKNOWN`；⑥ 末尾同时有 `REVIEW_FAIL` 行与更靠后的 `REVIEW_PASS` 行 → 取最后一个 = `REVIEW_PASS`。
 
 **同时记录一个环境事实（非本 plugin 缺陷，但决定重试策略）**：`qodercli --help` 中**不存在**任何 idle / stream / 超时相关开关，无法调高那个 60s 空闲断流阈值；worker 被截断只能靠"分类 + 重试"消化，这进一步抬高了 D18/D19 与 Task 4 的优先级。
+
+### D19 正则实测结果（7 条 fixture，实现时以此为准）
+
+统一正则（BSD grep -oE 可用，无 GNU 扩展）：
+```
+^[[:space:]]*\**[Ss]tatus\**[:：]\**[[:space:]]*\**(DONE_WITH_CONCERNS|DONE|BLOCKED|NEEDS_CONTEXT)|^[[:space:]]*\**REVIEW_(PASS|FAIL)\**[[:space:]]*$
+```
+
+| fixture | 期望 | 实测 |
+|---|---|---|
+| 真实成功日志末尾 `**Status:** DONE` | 匹配 | ✅ `**Status:** DONE` |
+| 真实截断日志（行内提及 4 个标记名） | 不匹配 | ✅ 空 |
+| 真实 CR 末行 `REVIEW_PASS` | 匹配 | ✅ `REVIEW_PASS` |
+| prompt 模板行 `REVIEW_PASS   # 无 CRITICAL/MAJOR` | 不匹配 | ✅ 空 |
+| 行内 `(**Status:** DONE/**Status:** BLOCKED)` | 不匹配 | ✅ 空 |
+| 中文冒号 `Status：DONE` | 匹配 | ✅ `Status：DONE` |
+| 1 字节空日志 | 不匹配 | ✅ 空 |
