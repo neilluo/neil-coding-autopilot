@@ -47,9 +47,10 @@ PARSE_MARKERS="$SCRIPT_DIR/parse-markers.sh"
 CLASSIFY="$SCRIPT_DIR/classify-outcome.sh"
 TASK_STATE="$SCRIPT_DIR/task-state.sh"
 TELEMETRY="$SCRIPT_DIR/telemetry.sh"
+REVIEW_CONTEXT="$SCRIPT_DIR/review-context.sh"
 BT='`'   # backtick, for awk field-splitting on `code` spans
 
-for dep in "$DISPATCH" "$PARSE" "$PARSE_MARKERS" "$CLASSIFY" "$TASK_STATE" "$TELEMETRY"; do
+for dep in "$DISPATCH" "$PARSE" "$PARSE_MARKERS" "$CLASSIFY" "$TASK_STATE" "$TELEMETRY" "$REVIEW_CONTEXT"; do
   [ -f "$dep" ] || { echo "ERROR: missing sibling script: $dep" >&2; exit 1; }
 done
 
@@ -271,11 +272,11 @@ build_fix_prompt() {
   } > "$out"
 }
 build_review_prompt() {
-  local files="$1" out="$2" n="${3:-}"
+  local out="$1" n="${2:-}"
   {
     echo "你是一个代码审查专家，对本 Task 的代码变更做严格审查（Track A reviewer，经 dispatch.sh 调度）。"
-    echo; echo "## 变更文件列表（请逐一读取完整内容再评审）"; echo
-    cat "$files"
+    echo; echo "以下是本 Task 的完整变更（有界 diff）。**先基于 diff 评审**；若某处需要上下文，再自行打开对应文件。"; echo
+    "$REVIEW_CONTEXT" --cwd "$CWD"
     echo; echo "## 审查维度"
     echo "- 通用：安全（注入/硬编码密钥）、逻辑正确性（空值/边界/资源泄漏/吞错）、健壮性（超时/兜底/失败日志）、可维护性。"
     echo "- 项目特定：读 AGENTS.md / autopilot/knowledge/SCHEMA.md / wiki/guides/*（存在才读），把其中强制规则当 Major 检查项。"
@@ -393,7 +394,7 @@ run_task() {
     # review
     ( cd "$CWD" && git status --porcelain 2>/dev/null | cut -c4- ) > "$LOG_DIR/task-$n-files-$round.txt" || true
     [ -s "$LOG_DIR/task-$n-files-$round.txt" ] || echo "(no changed files detected)" > "$LOG_DIR/task-$n-files-$round.txt"
-    build_review_prompt "$LOG_DIR/task-$n-files-$round.txt" "$LOG_DIR/task-$n-review-$round-prompt.md" "$n"
+    build_review_prompt "$LOG_DIR/task-$n-review-$round-prompt.md" "$n"
     log "  review (round $round) → dispatch($REVIEW_MODEL)"
     dispatch_with_retry "review" "$REVIEW_MODEL" "$LOG_DIR/task-$n-review-$round-prompt.md" \
       "审查上述变更文件（逐一读取），回复末尾输出 REVIEW_PASS 或 REVIEW_FAIL（有 CRITICAL/MAJOR 才 FAIL 并列问题）。" \
