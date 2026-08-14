@@ -1,199 +1,122 @@
 #!/usr/bin/env bash
-# install-daily-schedule.sh — install the daily-analysis.sh schedule (spec.md §5.6).
-#
-# WHAT: on macOS, generates+loads a launchd LaunchAgent plist that runs
-#   scripts/daily-analysis.sh once a day. On Linux, prints a crontab line to
-#   paste manually (no root/system-wide cron mutation).
-#
-# WHY THIS IS THE "ONE TRUE LINK" IN THE ENV-VAR CHAIN (spec.md §3.1):
-#   interactive runs read the user's shell profile for NEIL_AUTOPILOT_LOG_DIR,
-#   but launchd/cron do NOT source the profile. This script is the only place
-#   that freezes the resolved absolute $LOG_ROOT into the scheduler's own env
-#   (plist EnvironmentVariables / crontab prefix) — otherwise collection and
-#   analysis silently point at two different directories.
-#
-# USAGE:
-#   scripts/install-daily-schedule.sh [--hour H] [--log-dir DIR]
-#
-# OPTIONS:
-#   --hour H       Local hour (0-23) to run daily-analysis.sh. Default: 13.
-#   --log-dir DIR  Log root to freeze into the schedule. Default:
-#                  $NEIL_AUTOPILOT_LOG_DIR, else $HOME/neil-autopilot-logs-analysis.
-#                  Always resolved to an absolute path before use.
-#   -h | --help    Show usage.
-#
-# ENV:
-#   NEIL_AUTOPILOT_LOG_DIR    --log-dir fallback (see above).
-#   NEIL_AUTOPILOT_KEEP_DAYS  runs/ retention days frozen into the schedule (default 3).
-#
-# EXIT CODES:
-#   0    schedule installed (or crontab line printed on Linux)
-#   1    usage error / missing qodercli / unsupported platform / launchd failure
-#
-# PORTABILITY: bash 3.2 (macOS stock); no hardcoded username/home dir (C8) —
-#   everything routes through $HOME / $NEIL_AUTOPILOT_LOG_DIR / $SCRIPT_DIR.
-
 set -euo pipefail
 
-# ── self-locate (macOS-safe; not readlink -f) ────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DAILY_ANALYSIS="$SCRIPT_DIR/daily-analysis.sh"
 LABEL="com.neil.autopilot.daily"
-
 [ -f "$DAILY_ANALYSIS" ] || { echo "ERROR: missing sibling script: $DAILY_ANALYSIS" >&2; exit 1; }
+usage() { echo "Usage: install-daily-schedule.sh [--hour H] [--log-dir DIR] [--stage-scripts|--no-stage]"; }
 
-usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
-
-# ── args ──────────────────────────────────────────────────────────────────────
-HOUR=13
-LOG_DIR=""
-
-while [ $# -gt 0 ]; do
+HOUR=13; LOG_DIR=""; STAGE_MODE="auto"
+while [ "$#" -gt 0 ]; do
   case "$1" in
-    --hour) HOUR="$2"; shift 2;;
-    --log-dir) LOG_DIR="$2"; shift 2;;
-    -h|--help) usage; exit 0;;
-    *) echo "Unknown arg: $1 (use --help)" >&2; exit 1;;
+    --hour) [ "$#" -ge 2 ] || { usage >&2; exit 1; }; HOUR="$2"; shift 2 ;;
+    --log-dir) [ "$#" -ge 2 ] || { usage >&2; exit 1; }; LOG_DIR="$2"; shift 2 ;;
+    --stage-scripts) STAGE_MODE="yes"; shift ;;
+    --no-stage) STAGE_MODE="no"; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown arg: $1 (use --help)" >&2; exit 1 ;;
   esac
 done
+case "$HOUR" in ''|*[!0-9]*) echo "ERROR: --hour must be an integer 0-23" >&2; exit 1 ;; esac
+[ "$HOUR" -le 23 ] || { echo "ERROR: --hour must be 0-23" >&2; exit 1; }
+[ -n "$LOG_DIR" ] || LOG_DIR="${NEIL_AUTOPILOT_LOG_DIR:-${HOME:-}/Library/Logs/neil-autopilot}"
+KEEP_DAYS="${NEIL_AUTOPILOT_KEEP_DAYS:-30}"
+case "$KEEP_DAYS" in ''|*[!0-9]*) KEEP_DAYS=30 ;; esac
 
-case "$HOUR" in
-  ''|*[!0-9]*) echo "ERROR: --hour must be an integer 0-23" >&2; exit 1;;
-esac
-if [ "$HOUR" -gt 23 ]; then
-  echo "ERROR: --hour must be 0-23" >&2
-  exit 1
-fi
-
-[ -n "$LOG_DIR" ] || LOG_DIR="${NEIL_AUTOPILOT_LOG_DIR:-${HOME:-}/neil-autopilot-logs-analysis}"
-KEEP_DAYS="${NEIL_AUTOPILOT_KEEP_DAYS:-3}"
-case "$KEEP_DAYS" in ''|*[!0-9]*) KEEP_DAYS=3;; esac
-
-# ── resolve --log-dir to an absolute path (grow-on-demand mkdir) ────────────
-resolve_abs_path() {
-  local d="$1"
-  mkdir -p "$d" 2>/dev/null || true
-  (cd "$d" 2>/dev/null && pwd -P) || printf '%s\n' "$d"
+resolve_abs_path() { local d="$1"; mkdir -p "$d" 2>/dev/null || true; (cd "$d" 2>/dev/null && pwd -P) || printf '%s\n' "$d"; }
+xml_escape() {
+  local value="$1"
+  value="${value//&/&amp;}"; value="${value//</&lt;}"; value="${value//>/&gt;}"
+  value="${value//\"/&quot;}"; value="${value//\'/&apos;}"
+  printf '%s' "$value"
 }
+shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 ABS_LOG_DIR="$(resolve_abs_path "$LOG_DIR")"
-
-# ── PATH construction: probe each optional binary, dirname it, never inject
-#    "." for a missing one — a bare "." in a launchd PATH is a foothold for
-#    whatever happens to be CWD at trigger time, so we build this by hand
-#    instead of just copying $PATH. qodercli is the one hard requirement:
-#    without it the nightly job would silently no-op forever. ─────────────
 QODERCLI_PATH="$(command -v qodercli || true)"
-if [ -z "$QODERCLI_PATH" ]; then
-  echo "ERROR: qodercli 未在当前 PATH 中找到，无法安装每日调度（launchd 环境不 source shell profile，缺失会导致每日分析静默失效）。请先确保 qodercli 可执行后重试。" >&2
-  exit 1
-fi
-
-PATH_DIRS=()
-PATH_DIRS+=("$(dirname "$QODERCLI_PATH")")
-JQ_PATH="$(command -v jq || true)"
-[ -n "$JQ_PATH" ] && PATH_DIRS+=("$(dirname "$JQ_PATH")")
-GTIMEOUT_PATH="$(command -v gtimeout || true)"
-[ -n "$GTIMEOUT_PATH" ] && PATH_DIRS+=("$(dirname "$GTIMEOUT_PATH")")
+[ -n "$QODERCLI_PATH" ] || { echo "ERROR: qodercli 未在当前 PATH 中找到，无法安装每日调度。" >&2; exit 1; }
+PATH_DIRS=("$(dirname "$QODERCLI_PATH")")
+JQ_PATH="$(command -v jq || true)"; [ -n "$JQ_PATH" ] && PATH_DIRS+=("$(dirname "$JQ_PATH")")
+GTIMEOUT_PATH="$(command -v gtimeout || true)"; [ -n "$GTIMEOUT_PATH" ] && PATH_DIRS+=("$(dirname "$GTIMEOUT_PATH")")
 PATH_DIRS+=("/opt/homebrew/bin" "/usr/local/bin" "/usr/bin" "/bin")
-
-PATH_VALUE=""
-SEEN=":"
+PATH_VALUE=""; SEEN=":"
 for d in "${PATH_DIRS[@]}"; do
-  [ -n "$d" ] || continue
-  [ "$d" = "." ] && continue
-  case "$SEEN" in
-    *":$d:"*) continue;;
-  esac
-  SEEN="$SEEN$d:"
-  if [ -z "$PATH_VALUE" ]; then
-    PATH_VALUE="$d"
-  else
-    PATH_VALUE="$PATH_VALUE:$d"
-  fi
+  [ -n "$d" ] || continue; [ "$d" = "." ] && continue
+  case "$SEEN" in *":$d:"*) continue ;; esac
+  SEEN="$SEEN$d:"; [ -z "$PATH_VALUE" ] && PATH_VALUE="$d" || PATH_VALUE="$PATH_VALUE:$d"
 done
 
-# ── macOS: generate + (re)load the LaunchAgent plist ─────────────────────────
+ABS_HOME="$(cd "$HOME" && pwd -P)"
+is_protected() {
+  local path="$1" prefix
+  for prefix in "$ABS_HOME/Desktop" "$ABS_HOME/Documents" "$ABS_HOME/Downloads"; do
+    case "$path" in "$prefix"|"$prefix"/*) return 0 ;; esac
+  done
+  return 1
+}
+print_tcc_fix() {
+  local safe_log="$HOME/Library/Logs/neil-autopilot"
+  echo "ERROR: macOS protected path cannot be used safely without staging: $1" >&2
+  echo "Run: \"$SCRIPT_DIR/migrate-log-root.sh\" --from \"$ABS_LOG_DIR\" --to \"$safe_log\"" >&2
+  echo "Add to ~/.zshrc: export NEIL_AUTOPILOT_LOG_DIR=\"$safe_log\"" >&2
+  echo "Alternatively grant Full Disk Access（完整磁盘访问权限）to /bin/bash." >&2
+}
+
 macos_install() {
+  local scheduled_script="$DAILY_ANALYSIS" effective_log="$ABS_LOG_DIR"
   local plist_dir="$HOME/Library/LaunchAgents"
   local plist_path="$plist_dir/$LABEL.plist"
+  local stage_root="$HOME/Library/Application Support/neil-autopilot"
+  local staged_scripts="$stage_root/scripts"
+  [ "$STAGE_MODE" = "auto" ] && STAGE_MODE="yes"
+  if [ "$STAGE_MODE" = "yes" ]; then
+    rm -rf "$staged_scripts.new"; mkdir -p "$stage_root"; cp -R "$SCRIPT_DIR" "$staged_scripts.new"
+    rm -rf "$staged_scripts"; mv "$staged_scripts.new" "$staged_scripts"
+    scheduled_script="$staged_scripts/daily-analysis.sh"
+    echo "plugin 更新后需重跑本脚本以刷新 staged 副本。"
+    if is_protected "$effective_log"; then
+      local protected_log="$effective_log"
+      effective_log="$HOME/Library/Logs/neil-autopilot"; mkdir -p "$effective_log"
+      echo "受保护日志路径已改为安全路径: $effective_log"
+      printf '迁移已有日志（只复制不删除）: "%s" --from "%s" --to "%s"\n' \
+        "$staged_scripts/migrate-log-root.sh" "$protected_log" "$effective_log"
+    fi
+  fi
+  if is_protected "$scheduled_script" || is_protected "$effective_log"; then print_tcc_fix "$scheduled_script / $effective_log"; exit 1; fi
   mkdir -p "$plist_dir"
-
-  # idempotent reinstall: unload/remove any previous version first.
   if [ -f "$plist_path" ]; then
-    launchctl bootout "gui/$UID/$LABEL" >/dev/null 2>&1 \
-      || launchctl unload "$plist_path" >/dev/null 2>&1 \
-      || true
+    launchctl bootout "gui/$UID/$LABEL" >/dev/null 2>&1 || launchctl unload "$plist_path" >/dev/null 2>&1 || true
     rm -f "$plist_path"
   fi
-
+  local xml_label xml_script xml_log xml_keep_days xml_path xml_output
+  xml_label="$(xml_escape "$LABEL")"; xml_script="$(xml_escape "$scheduled_script")"
+  xml_log="$(xml_escape "$effective_log")"; xml_keep_days="$(xml_escape "$KEEP_DAYS")"
+  xml_path="$(xml_escape "$PATH_VALUE")"; xml_output="$(xml_escape "$effective_log/daily-analysis.launchd.log")"
   cat > "$plist_path" <<PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>$LABEL</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/bin/bash</string>
-        <string>$DAILY_ANALYSIS</string>
-    </array>
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>$HOUR</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>NEIL_AUTOPILOT_LOG_DIR</key>
-        <string>$ABS_LOG_DIR</string>
-        <key>NEIL_AUTOPILOT_KEEP_DAYS</key>
-        <string>$KEEP_DAYS</string>
-        <key>PATH</key>
-        <string>$PATH_VALUE</string>
-    </dict>
-    <key>StandardOutPath</key>
-    <string>$ABS_LOG_DIR/daily-analysis.launchd.log</string>
-    <key>StandardErrorPath</key>
-    <string>$ABS_LOG_DIR/daily-analysis.launchd.log</string>
-    <key>RunAtLoad</key>
-    <false/>
-</dict>
-</plist>
+<plist version="1.0"><dict>
+<key>Label</key><string>$xml_label</string>
+<key>ProgramArguments</key><array><string>/bin/bash</string><string>$xml_script</string></array>
+<key>StartCalendarInterval</key><dict><key>Hour</key><integer>$HOUR</integer><key>Minute</key><integer>0</integer></dict>
+<key>EnvironmentVariables</key><dict><key>NEIL_AUTOPILOT_LOG_DIR</key><string>$xml_log</string><key>NEIL_AUTOPILOT_KEEP_DAYS</key><string>$xml_keep_days</string><key>PATH</key><string>$xml_path</string></dict>
+<key>StandardOutPath</key><string>$xml_output</string>
+<key>StandardErrorPath</key><string>$xml_output</string><key>RunAtLoad</key><false/>
+</dict></plist>
 PLIST_EOF
-
-  if launchctl bootstrap "gui/$UID" "$plist_path" >/dev/null 2>&1; then
-    echo "已安装并加载 launchd 定时任务（bootstrap）: $plist_path"
-  elif launchctl load "$plist_path" >/dev/null 2>&1; then
-    echo "已安装并加载 launchd 定时任务（load，bootstrap 不可用）: $plist_path"
-  else
-    echo "ERROR: launchctl bootstrap/load 均失败: $plist_path" >&2
-    exit 1
-  fi
-
-  echo ""
-  echo "每日 $HOUR:00 本地时间将运行: $DAILY_ANALYSIS"
-  echo "日志根目录: $ABS_LOG_DIR"
-  echo ""
-  echo "请将以下一行加入你的 shell profile（~/.zshrc / ~/.bash_profile），保证交互式运行与 launchd 定时任务解析到同一日志目录："
-  echo "export NEIL_AUTOPILOT_LOG_DIR=\"$ABS_LOG_DIR\""
+  if launchctl bootstrap "gui/$UID" "$plist_path" >/dev/null 2>&1; then echo "已安装并加载 launchd 定时任务（bootstrap）: $plist_path"
+  elif launchctl load "$plist_path" >/dev/null 2>&1; then echo "已安装并加载 launchd 定时任务（load）: $plist_path"
+  else echo "ERROR: launchctl bootstrap/load 均失败: $plist_path" >&2; exit 1; fi
+  echo "每日 $HOUR:00 本地时间将运行: $scheduled_script"; echo "日志根目录: $effective_log"
+  echo "export NEIL_AUTOPILOT_LOG_DIR=\"$effective_log\""
 }
-
-# ── Linux: no root/system cron mutation — print a line to paste manually ────
 linux_install() {
-  echo "Linux 环境：请手动执行 crontab -e，加入以下一行（每日 $HOUR:00 本地时间运行）："
-  echo ""
-  echo "0 $HOUR * * * NEIL_AUTOPILOT_LOG_DIR=\"$ABS_LOG_DIR\" NEIL_AUTOPILOT_KEEP_DAYS=\"$KEEP_DAYS\" PATH=\"$PATH_VALUE\" \"$DAILY_ANALYSIS\" >> \"$ABS_LOG_DIR/daily-analysis.cron.log\" 2>&1"
-  echo ""
-  echo "请将以下一行加入你的 shell profile（~/.bashrc 等），保证交互式运行与 cron 定时任务解析到同一日志目录："
-  echo "export NEIL_AUTOPILOT_LOG_DIR=\"$ABS_LOG_DIR\""
+  local cron_line
+  echo "Linux 环境：请手动执行 crontab -e，加入以下一行："
+  cron_line="0 $HOUR * * * NEIL_AUTOPILOT_LOG_DIR=$(shell_quote "$ABS_LOG_DIR") NEIL_AUTOPILOT_KEEP_DAYS=$(shell_quote "$KEEP_DAYS") PATH=$(shell_quote "$PATH_VALUE") $(shell_quote "$DAILY_ANALYSIS") >> $(shell_quote "$ABS_LOG_DIR/daily-analysis.cron.log") 2>&1"
+  cron_line="${cron_line//%/\\%}"
+  printf '%s\n' "$cron_line"
+  printf 'export NEIL_AUTOPILOT_LOG_DIR=%s\n' "$(shell_quote "$ABS_LOG_DIR")"
 }
-
 PLATFORM="$(uname -s)"
-case "$PLATFORM" in
-  Darwin) macos_install;;
-  Linux) linux_install;;
-  *) echo "ERROR: unsupported platform: $PLATFORM (only Darwin/Linux supported)" >&2; exit 1;;
-esac
+case "$PLATFORM" in Darwin) macos_install ;; Linux) linux_install ;; *) echo "ERROR: unsupported platform: $PLATFORM" >&2; exit 1 ;; esac

@@ -18,6 +18,7 @@
 #
 # Usage: bash scripts/smoke-telemetry.sh   # 0 = all pass, 1 = failure.
 set -uo pipefail
+unset AUTOPILOT_RUN_ID
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 TELEMETRY="$SCRIPT_DIR/telemetry.sh"
@@ -205,6 +206,88 @@ run_unknown_sink_scenario() {
   fi
 }
 run_unknown_sink_scenario
+
+# ── scenario 7: optional dispatch fields + defaults ─────────────────────────
+run_dispatch_metadata_scenario() {
+  local root="$WORK/s7" fake_home="$WORK/home" jsonl=""
+  mkdir -p "$root" "$fake_home"
+  (
+    NEIL_AUTOPILOT_LOG_DIR="$root"
+    AUTOPILOT_TM_INPUT_TOKENS=101
+    AUTOPILOT_TM_OUTPUT_TOKENS=202
+    AUTOPILOT_TM_CACHE_READ_TOKENS=303
+    AUTOPILOT_TM_COST_USD=0.0123
+    AUTOPILOT_TM_CONTEXT_RATIO=0.028036
+    AUTOPILOT_TM_NUM_TURNS=4
+    AUTOPILOT_TM_API_MS=567
+    AUTOPILOT_TM_ATTEMPT=2
+    AUTOPILOT_TM_FAILURE_CLASS=$'rate_limit\tburst'
+    AUTOPILOT_TM_PROMPT_BYTES=890
+    AUTOPILOT_TM_OUTPUT_BYTES=1234
+    AUTOPILOT_TM_IS_ERROR=true
+    export NEIL_AUTOPILOT_LOG_DIR AUTOPILOT_TM_INPUT_TOKENS AUTOPILOT_TM_OUTPUT_TOKENS
+    export AUTOPILOT_TM_CACHE_READ_TOKENS AUTOPILOT_TM_COST_USD AUTOPILOT_TM_CONTEXT_RATIO
+    export AUTOPILOT_TM_NUM_TURNS AUTOPILOT_TM_API_MS AUTOPILOT_TM_ATTEMPT
+    export AUTOPILOT_TM_FAILURE_CLASS AUTOPILOT_TM_PROMPT_BYTES AUTOPILOT_TM_OUTPUT_BYTES
+    export AUTOPILOT_TM_IS_ERROR
+    . "$TELEMETRY"
+    telemetry_emit_dispatch 1 "$(date +%s)"
+    unset AUTOPILOT_TM_INPUT_TOKENS AUTOPILOT_TM_OUTPUT_TOKENS AUTOPILOT_TM_CACHE_READ_TOKENS
+    unset AUTOPILOT_TM_COST_USD AUTOPILOT_TM_CONTEXT_RATIO AUTOPILOT_TM_NUM_TURNS
+    unset AUTOPILOT_TM_API_MS AUTOPILOT_TM_ATTEMPT AUTOPILOT_TM_FAILURE_CLASS
+    unset AUTOPILOT_TM_PROMPT_BYTES AUTOPILOT_TM_OUTPUT_BYTES AUTOPILOT_TM_IS_ERROR
+    telemetry_emit_dispatch 0 "$(date +%s)"
+  )
+
+  jsonl="$root/runs/$(date +%F).jsonl"
+  if [ ! -f "$jsonl" ]; then
+    fail "dispatch metadata scenario: $jsonl not created"
+  elif ! jq -e . "$jsonl" >/dev/null 2>&1; then
+    fail "dispatch metadata scenario: one or more lines are invalid JSON"
+  elif ! jq -e -s '.[0] | .input_tokens == 101 and .output_tokens == 202 and .cache_read_tokens == 303 and .cost_usd == 0.0123 and .context_ratio == 0.028036 and .num_turns == 4 and .api_ms == 567 and .attempt == 2 and .failure_class == "rate_limit\tburst" and .prompt_bytes == 890 and .output_bytes == 1234 and .is_error == true' "$jsonl" >/dev/null 2>&1; then
+    fail "dispatch metadata scenario: optional fields do not match expected typed values"
+  elif ! jq -e -s '.[1] | has("input_tokens") == false' "$jsonl" >/dev/null 2>&1; then
+    fail "dispatch metadata scenario: unset input_tokens field was not omitted"
+  else
+    pass "dispatch metadata scenario: optional fields are exact and unset fields are omitted"
+  fi
+
+  local default_root="" retention_root="$root/default-retention" old_stamp=""
+  default_root="$(
+    unset NEIL_AUTOPILOT_LOG_DIR
+    HOME="$fake_home"
+    export HOME
+    . "$TELEMETRY"
+    telemetry_log_root
+  )"
+  if [ "$default_root" != "$fake_home/Library/Logs/neil-autopilot" ]; then
+    fail "dispatch metadata scenario: default root mismatch: '$default_root'"
+  else
+    pass "dispatch metadata scenario: default log root is updated"
+  fi
+
+  mkdir -p "$retention_root/runs"
+  printf '{"old":true}\n' > "$retention_root/runs/four-days-old.jsonl"
+  if date -v-4d +%Y%m%d%H%M >/dev/null 2>&1; then
+    old_stamp="$(date -v-4d +%Y%m%d%H%M)"
+  else
+    old_stamp="$(date -d '4 days ago' +%Y%m%d%H%M)"
+  fi
+  touch -t "$old_stamp" "$retention_root/runs/four-days-old.jsonl"
+  (
+    unset NEIL_AUTOPILOT_KEEP_DAYS
+    NEIL_AUTOPILOT_LOG_DIR="$retention_root"
+    export NEIL_AUTOPILOT_LOG_DIR
+    . "$TELEMETRY"
+    telemetry_rotate
+  )
+  if [ ! -f "$retention_root/runs/four-days-old.jsonl" ]; then
+    fail "dispatch metadata scenario: default retention is not 30 days"
+  else
+    pass "dispatch metadata scenario: default KEEP_DAYS is 30"
+  fi
+}
+run_dispatch_metadata_scenario
 
 if [ "$FAILED" = 0 ]; then
   echo "SMOKE: ALL PASS"

@@ -1,0 +1,1 @@
+- Benchmark: review 1000945 B → 212190 B (78.8%); entry SKILL.md 16756 B → 9212 B (45.0%); avoidable transient/replay wall time 0 s / 0 s. Offline evidence supports lower review context and injection cost without model calls.

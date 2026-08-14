@@ -102,7 +102,7 @@ flowchart TD
 
 | Skill | 层级 | 职责 |
 |-------|------|------|
-| `using-neil-autopilot` | 入口 | Hook 自动注入 bootstrap context，声明执行档位、HARD-GATE、完整流程图 |
+| `using-neil-autopilot` | 入口 | Hook 自动注入精简 bootstrap context，声明执行档位与 HARD-GATE；流程图、目录、初始化、示例、恢复说明按需加载 `references/` |
 | `autopilot-init` | 顶层阶段 | Harness 初始化/审计（AGENTS.md + hooks + knowledge/wiki），已有则评分补全 |
 | `autopilot-explore` | 顶层阶段 | 需求澄清 + 设计方向确认（强制多轮交互，HARD-GATE，不可跳过） |
 | `autopilot-analyze` | 顶层阶段 | 基于 explore 产出生成 Spec + 多轮自检 |
@@ -252,11 +252,14 @@ autopilot/
 │       ├── progress.md           # 工作流状态（档位 A）
 │       └── explore-notes.md      # 澄清阶段的对话记录摘要
 │
-├── archive/                      # 已完成的历史变更
-│   └── YYYY-MM-DD-<feature>/
-│       ├── spec.md
-│       ├── tasks.md
-│       └── summary.md            # 完成摘要
+├── archive/                      # 已完成的历史变更（四层日期结构）
+│   └── YYYY/
+│       └── MM/
+│           └── MM-DD/
+│               └── YYYY-MM-DD-<feature>/
+│                   ├── spec.md
+│                   ├── tasks.md
+│                   └── summary.md        # 完成摘要
 │
 ├── knowledge/                    # Karpathy LLM Wiki 三层知识库
 │   ├── SCHEMA.md                 # 维护规则 + 项目元数据（≤200行）
@@ -295,19 +298,57 @@ autopilot/
 
 每次跑 autopilot，各角色 worker（implementer / reviewer / fixer）的关键运行信号会自动埋点落盘到 `$NEIL_AUTOPILOT_LOG_DIR`（项目外，不入被开发项目的 git）：
 
-- `runs/YYYY-MM-DD.jsonl`：结构化事件（dispatch / round / task / run），默认 **3 天滚动删**；`runs/<run_id>/` 额外存关键 worker 输出（review 全文 + BLOCKED 步骤日志），供复盘。
+- `runs/YYYY-MM-DD.jsonl`：结构化事件（dispatch / round / task / run），默认 **30 天滚动删**；`runs/<run_id>/` 额外存关键 worker 输出（review 全文 + BLOCKED 步骤日志），供复盘。
 - `metrics/YYYY-MM-DD.json`：每日体检数（verify 失败率、review FAIL/INCOMPLETE 率、平均修复轮数、各角色耗时等，`jq` 确定性聚合），**长期保留**。
 - `reports/YYYY-MM-DD.md`：每天 13:00 由 `scripts/daily-analysis.sh` 定时触发，dispatch 一个 analysis agent 读取近期 metrics 趋势 + 当日 runs，产出体检摘要 + **针对插件自身角色 prompt（`run-track-a.sh` 里的 `build_impl_prompt`/`build_fix_prompt`/`build_review_prompt`）的具体改进建议**，**长期保留**。
 
 **核心原则：系统绝不自动改自己。** 报告只是建议，是否采纳、如何改插件角色 prompt，永远由人工读 `reports/` 后手动决定；遥测也绝不针对业务项目的 `AGENTS.md` 提建议（聚合数据来自多个项目，用于改插件全局 prompt 才是正确用法）。
 
+
+### 成本与时延观测
+
+每次 worker 调度会在 `$NEIL_AUTOPILOT_LOG_DIR/runs/YYYY-MM-DD.jsonl` 写一条 `event="dispatch"`。可直接查看 `duration_s`、`stage`、`model`、`attempt`、`failure_class`；Qoder 且本机有 `jq` 时，还会从 `qodercli -o json` 信封记录真实 `input_tokens`、`output_tokens`、`cache_read_tokens` 与 `cost_usd`。字段拿不到时会省略，不会写 `0` 冒充已知值。
+
+按 stage 和 model 聚合当日调用数、耗时、token 与成本：
+
+```bash
+jq -s '
+  map(select(.event == "dispatch"))
+  | group_by([.stage, .model])
+  | map({
+      stage: (.[0].stage // "unknown"),
+      model: (.[0].model // "unknown"),
+      calls: length,
+      duration_s: (map(.duration_s // 0) | add),
+      input_tokens: (map(.input_tokens // 0) | add),
+      output_tokens: (map(.output_tokens // 0) | add),
+      cost_usd: (map(.cost_usd // 0) | add)
+    })
+' "$NEIL_AUTOPILOT_LOG_DIR"/runs/*.jsonl
+```
+
+安装每日分析（默认 13:00）后，`daily-analysis.sh` 会生成 `metrics/YYYY-MM-DD.json` 与 `reports/YYYY-MM-DD.md`：
+
+```bash
+export NEIL_AUTOPILOT_LOG_DIR="$HOME/Library/Logs/neil-autopilot"
+bash scripts/install-daily-schedule.sh --hour 13
+```
+
+macOS 的 launchd 无法可靠访问 Desktop、Documents、Downloads 等 TCC 保护目录。安装器检测到脚本或日志目录位于这些前缀时，默认把脚本 stage 到 `$HOME/Library/Application Support/neil-autopilot/scripts/`；显式使用 `--no-stage` 则会拒绝生成注定以 126 失败的任务。旧日志可只复制迁移，源目录不会自动删除：
+
+```bash
+bash scripts/migrate-log-root.sh \
+  --from "$HOME/neil-autopilot-logs-analysis" \
+  --to "$HOME/Library/Logs/neil-autopilot"
+```
+
 ### 环境变量
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `NEIL_AUTOPILOT_LOG_DIR` | `$HOME/neil-autopilot-logs-analysis` | 遥测日志根目录；若落在被开发项目 `$CWD` 内会自动降级到 `$TMPDIR`，避免被 `git add -A` 卷入业务提交 |
+| `NEIL_AUTOPILOT_LOG_DIR` | `$HOME/Library/Logs/neil-autopilot` | 遥测日志根目录；若落在被开发项目 `$CWD` 内会自动降级到 `$TMPDIR`，避免被 `git add -A` 卷入业务提交 |
 | `NEIL_AUTOPILOT_TELEMETRY` | `1` | 设为 `0` 全局关闭遥测（fail-safe 开关，关闭后零落盘） |
-| `NEIL_AUTOPILOT_KEEP_DAYS` | `3` | `runs/` 原始日志保留天数（`metrics/`、`reports/` 不受此影响，长期保留） |
+| `NEIL_AUTOPILOT_KEEP_DAYS` | `30` | `runs/` 原始日志保留天数（`metrics/`、`reports/` 不受此影响，长期保留） |
 | `NEIL_AUTOPILOT_LOG_SINK` | `file` | 选择 `telemetry.sh` 写入后端；默认写本地文件，是云端保险/未来接入 OSS/SLS 等云后端的扩展点（未识别值兜底回退到 `file`） |
 | `AUTOPILOT_DAILY_MODEL` | `Ultimate` | 每日 analysis agent 使用的模型 |
 
@@ -315,7 +356,7 @@ autopilot/
 
 ```bash
 # 必须先设好 NEIL_AUTOPILOT_LOG_DIR（脚本会把解析出的绝对路径固化进 launchd plist / crontab）
-export NEIL_AUTOPILOT_LOG_DIR="$HOME/neil-autopilot-logs-analysis"
+export NEIL_AUTOPILOT_LOG_DIR="$HOME/Library/Logs/neil-autopilot"
 bash scripts/install-daily-schedule.sh --hour 13
 ```
 
@@ -324,7 +365,7 @@ bash scripts/install-daily-schedule.sh --hour 13
 
 ### 保留策略
 
-- `runs/`：默认 **3 天滚动删**（含事件 JSONL 与关键输出目录），由 `daily-analysis.sh` 每次运行时基于 `NEIL_AUTOPILOT_KEEP_DAYS` 触发 rotate。
+- `runs/`：默认 **30 天滚动删**（含事件 JSONL 与关键输出目录），由 `daily-analysis.sh` 每次运行时基于 `NEIL_AUTOPILOT_KEEP_DAYS` 触发 rotate。
 - `metrics/` + `reports/`：**长期保留，不设上限**（体量级 ~KB/天），用于跨月观察"改了角色 prompt 之后 FAIL 率有没有下降"的趋势。
 
 ## License

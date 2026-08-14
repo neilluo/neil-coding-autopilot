@@ -76,168 +76,13 @@ bugfix 类型走轻量 analyze（仅生成最小化 spec：bug 范围 + 修复�
 spec-ready 类型将 explore 和 analyze 都标记为 `[x] ... (skipped)`。
 init 阶段在项目已有完整 harness 时标记为 `[x] init (skipped)`。
 
-## 目录结构
 
-autopilot 的所有产物统一管理在项目根目录的 `autopilot/` 下（**完整形态**如下；实际**按需生长**，`autopilot-init` 不预建空目录 / 空状态机文件）：
 
-```
-autopilot/
-├── changes/                      # 活跃的开发变更（每次 run 一个文件夹）
-│   └── <feature-name>/           # 如 add-user-registration/
-│       ├── spec.md               # 本次变更的技术方案
-│       ├── tasks.md              # Task 拆解（两档都产，run-track-a.sh 输入；小 spec 可 1 Task）
-│       ├── progress.md           # 工作流状态（档位 A）
-│       └── explore-notes.md      # 澄清阶段的对话记录摘要
-│
-├── archive/                      # 已完成的历史变更（四层：YYYY/MM/MM-DD + 原扁平名叶子）
-│   └── YYYY/                     # 年，如 2026/
-│       └── MM/                   # 月，如 07/
-│           └── MM-DD/            # 月-日，如 07-06/
-│               └── YYYY-MM-DD-<feature>/  # 原扁平名叶子，如 2026-07-06-video-distributor/
-│                   ├── spec.md
-│                   ├── tasks.md
-│                   └── summary.md         # 完成摘要
-│
-├── knowledge/                    # Karpathy LLM Wiki 三层知识库
-│   ├── SCHEMA.md                 # 维护规则 + 项目元数据（≤200行）
-│   ├── raw/                      # Layer 1: 不可变源（CR/踩坑/代码快照）
-│   ├── wiki/                     # Layer 2: LLM 编译产物（index + entities/concepts/guides/comparisons）
-│   └── references/               # 静态框架性内容
-│
-└── hooks/                        # 质量门禁（Feedback/Sensor Layer）
-    ├── post-edit.sh              # 变更后自动检查
-    ├── build-gate.sh             # 编译验证
-    └── pre-completion.md         # 完成前自检清单
-```
 
-## 初始化流程
-
-执行任何阶段前，先切功能分支、再建立变更目录：
-
-```bash
-FEATURE_NAME="<feature-name>"   # 从需求提取的 kebab-case 标识
-TYPE="fix"                      # 任务类型 → feature | fix | refactor（见「任务类型分流」）
-
-# 分支纪律（HARD-GATE #2）：禁止在主干直接改；当前在 main/master 则先切功能分支
-CUR="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
-case "$CUR" in
-  main|master) git checkout -b "${TYPE}/${FEATURE_NAME}" ;;
-  *) echo "已在功能分支 $CUR，继续" ;;
-esac
-
-mkdir -p autopilot/changes/${FEATURE_NAME}
-
-# 运行期哨兵：激活「控制器写码硬门禁」(hooks/guard-controller-write.sh 仅在此哨兵存在时 deny)。
-# 记录 epoch + PID 便于排障；由 finish/evolve 结束时移除。异常残留超 12h 视为陈旧，guard 自动忽略，
-# 避免误锁日常编码（人工可随时 rm -f autopilot/.run-active 逃生）。
-mkdir -p autopilot
-{ date +%s; echo "pid=$$"; echo "started=$(date '+%Y-%m-%d %H:%M:%S')"; } > autopilot/.run-active
-
-# 哨兵是瞬时运行态、非交付物：确保被 .gitignore 排除，否则 run-track-a.sh 的
-# `git add -A`（逐 Task 提交）会把它卷进被开发项目的提交历史。幂等追加。
-grep -qxF 'autopilot/.run-active' .gitignore 2>/dev/null || printf '%s\n' 'autopilot/.run-active' >> .gitignore
-```
-
-- **档位 A**：写 `progress.md`（下方模板）作为落盘状态源。
-- **档位 B**：以 TodoWrite 为状态源；`progress.md` 可选。
-
-知识库（`autopilot/knowledge/**`）与 hooks 目录**不在此处预建空目录**——由 `autopilot-init` 按需生长（缺什么建什么），避免留下空壳。
-
-progress.md 模板（档位 A / 需要落盘时）：
-
-```bash
-cat > autopilot/changes/${FEATURE_NAME}/progress.md << 'EOF'
-# Autopilot Progress
-
-> Auto-maintained by autopilot workflow. Do not edit manually.
-> Feature: [feature name]
-> Branch: [branch name]
-> Started: YYYY-MM-DD HH:mm
-
-- [ ] init
-- [ ] explore
-- [ ] analyze
-- [ ] plan
-- [ ] loop
-- [ ] finish
-- [ ] evolve
-EOF
-```
-
-替换 `[feature name]`、`[branch name]`、`YYYY-MM-DD HH:mm` 为实际值。
-
-**向下兼容**：如果项目根目录存在旧的 SPEC.md/tasks.md/.autopilot/，首次运行时提示用户归档到 `autopilot/archive/`。
-
-## 完整流程
-
-> 下图是完整阶段编排（两档同序）。**档位 B（交互）**：explore/analyze/plan/finish/evolve 由控制器在会话内执行、TodoWrite 记录阶段状态、checkpoint 以"自查前置不变量"替代；**loop 阶段两档都调 `run-track-a.sh` 托管 qodercli**（控制器不内联写码）。
-
-```dot
-digraph autopilot {
-    rankdir=TB;
-    "User requirement received" [shape=doublecircle];
-    "Determine task type" [shape=diamond];
-    "Initialize autopilot/changes/<name>/" [shape=box];
-    "Needs init?" [shape=diamond];
-    "Invoke Skill(autopilot-init)" [shape=box];
-    "Invoke Skill(autopilot-checkpoint) for init" [shape=box];
-    "Invoke Skill(autopilot-explore)" [shape=box];
-    "Invoke Skill(autopilot-checkpoint) for explore" [shape=box];
-    "Invoke Skill(autopilot-analyze)" [shape=box];
-    "Invoke Skill(autopilot-checkpoint) for analyze" [shape=box];
-    "Invoke Skill(autopilot-plan)" [shape=box];
-    "Invoke Skill(autopilot-checkpoint) for plan" [shape=box];
-    "Invoke Skill(autopilot-loop)" [shape=box];
-    "Invoke Skill(autopilot-checkpoint) for loop" [shape=box];
-    "Invoke Skill(autopilot-finish)" [shape=box];
-    "Invoke Skill(autopilot-checkpoint) for finish" [shape=box];
-    "Invoke Skill(autopilot-evolve)" [shape=box];
-    "Invoke Skill(autopilot-checkpoint) for evolve" [shape=box];
-    "Done" [shape=doublecircle];
-
-    "User requirement received" -> "Determine task type";
-    "Determine task type" -> "Initialize autopilot/changes/<name>/";
-    "Initialize autopilot/changes/<name>/" -> "Needs init?";
-    "Needs init?" -> "Invoke Skill(autopilot-init)" [label="no AGENTS.md or incomplete harness"];
-    "Needs init?" -> "Invoke Skill(autopilot-explore)" [label="harness ready, feature/bugfix"];
-    "Needs init?" -> "Invoke Skill(autopilot-plan)" [label="harness ready, spec-ready"];
-    "Invoke Skill(autopilot-init)" -> "Invoke Skill(autopilot-checkpoint) for init";
-    "Invoke Skill(autopilot-checkpoint) for init" -> "Invoke Skill(autopilot-explore)" [label="feature/bugfix"];
-    "Invoke Skill(autopilot-checkpoint) for init" -> "Invoke Skill(autopilot-plan)" [label="spec-ready"];
-    "Invoke Skill(autopilot-explore)" -> "Invoke Skill(autopilot-checkpoint) for explore";
-    "Invoke Skill(autopilot-checkpoint) for explore" -> "Invoke Skill(autopilot-analyze)" [label="feature/bugfix"];
-    "Invoke Skill(autopilot-analyze)" -> "Invoke Skill(autopilot-checkpoint) for analyze";
-    "Invoke Skill(autopilot-checkpoint) for analyze" -> "Invoke Skill(autopilot-plan)";
-    "Invoke Skill(autopilot-plan)" -> "Invoke Skill(autopilot-checkpoint) for plan";
-    "Invoke Skill(autopilot-checkpoint) for plan" -> "Invoke Skill(autopilot-loop)";
-    "Invoke Skill(autopilot-loop)" -> "Invoke Skill(autopilot-checkpoint) for loop";
-    "Invoke Skill(autopilot-checkpoint) for loop" -> "Invoke Skill(autopilot-finish)";
-    "Invoke Skill(autopilot-finish)" -> "Invoke Skill(autopilot-checkpoint) for finish";
-    "Invoke Skill(autopilot-checkpoint) for finish" -> "Invoke Skill(autopilot-evolve)";
-    "Invoke Skill(autopilot-evolve)" -> "Invoke Skill(autopilot-checkpoint) for evolve";
-    "Invoke Skill(autopilot-checkpoint) for evolve" -> "Done";
-}
-```
-
-## 使用方式
-
-```
-# 有现成 spec 的项目
-/neil-coding-autopilot "按照 spec.md 开发整个项目"
-
-# 从需求开始
-/neil-coding-autopilot "添加用户注册功能，支持邮箱和手机号"
-
-# GitHub Issue 驱动
-/neil-coding-autopilot --issue https://github.com/user/repo/issues/42
-
-# Bug 修复（轻量 explore + 跳过 analyze）
-/neil-coding-autopilot "修复登录页面 token 过期未刷新的问题"
-```
 
 ## Skill 调用规则
 
-### 通用（两档都适用）
+### 通用
 1. 先声明当前**执行档位**（A 无人值守 / B 交互）。
 2. 不得跳过 **explore**（需求澄清强制）。
 3. 不得跳过 **CR**（未审变更不得进入 finish）。
@@ -245,36 +90,41 @@ digraph autopilot {
 5. **loop 的开发一律经 `run-track-a.sh` 托管 qodercli**——控制器不内联写码。
 6. 任何 skill / worker 报告 **BLOCKED** → 停止流程并通知用户。
 
-### 档位 A（无人值守）
+### 档位 A
 - explore/analyze/plan 若已 headless 就绪（或 spec-ready），从终端起 `run-track-a.sh` 端到端跑 loop。
 - 每阶段完成后调用 `Skill("autopilot-checkpoint")` 校验前置并标记 `progress.md`。
 - 阶段间完成状态以 `progress.md` 为唯一事实源。
 
-### 档位 B（交互）
+### 档位 B
 - 控制器在会话内跑 explore/analyze/plan（跟用户交互）+ finish/evolve，**TodoWrite 为阶段级状态源**。
 - **loop：控制器 `bash run-track-a.sh ...` 托管开发**（只看日志摘要，不内联写码）；Task 级状态由脚本写进 tasks.md。
 - 以"自查前置不变量"替代 checkpoint-skill 调用。
 - 仍需在变更目录落盘 `spec.md`（设计留痕）+ `tasks.md`（run-track-a.sh 输入，可小到 1 Task）；`progress.md` 可选。
 
-**路由职责完全在控制器**：各 skill 只报告状态，不负责调度下一阶段。
-详细约定见 `_shared/conventions.md`。
+**路由只由控制器负责**；skill 只报告状态。
+见 `_shared/conventions.md`。
+
+## 状态约定（SSOT，fail-closed）
+
+每个 skill/worker 必须输出 `{STAGE}_STATUS=DONE | BLOCKED|{原因} | SKIPPED`：DONE 推进；BLOCKED 立即停止并通知用户；SKIPPED 留痕后推进。REVIEW 三态以 `_shared/conventions.md` 为 SSOT：`PASS`（`REVIEW_PASS`，可 commit/finish）、`FAIL`（`REVIEW_FAIL`，fix 后重审）、`INCOMPLETE`（`REVIEW_INCOMPLETE`，禁 commit/finish）。未经审查绝不静默通过。
+
+## 按需加载
+
+| Reference | 何时读 |
+|---|---|
+| [workflow-graph.md](references/workflow-graph.md) | 完整 DOT/checkpoint 路由 |
+| [directory-layout.md](references/directory-layout.md) | 产物/archive 四层目录 |
+| [bootstrap.md](references/bootstrap.md) | 分支、目录、哨兵、progress、兼容迁移 |
+| [usage-examples.md](references/usage-examples.md) | 调用示例 |
+| [recovery.md](references/recovery.md) | 中断恢复/断点续跑 |
 
 ## 路径约定
 
-详见 `_shared/conventions.md`。控制器在调度时确定具体值：
+详见 `_shared/conventions.md`。
 
 | 变量 | 含义 |
 |------|------|
-| $CHANGE_DIR | 当前变更目录 |
+| $CHANGE_DIR | 变更目录 |
 | $KNOWLEDGE_DIR | 知识库目录 |
 | $HOOKS_DIR | 质量门禁目录 |
-| $ARCHIVE_DIR | 归档目录 |
-
-## 恢复机制
-
-如果流程因中断需要恢复：
-
-1. 检查 `autopilot/changes/` 下是否有活跃的变更目录
-2. 读取其 `progress.md`（档位 A）或 TodoWrite 状态（档位 B）确定最后完成的阶段
-3. 从下一个未完成阶段继续执行
-4. 不重复已完成的阶段
+| $ARCHIVE_DIR | 归档 |

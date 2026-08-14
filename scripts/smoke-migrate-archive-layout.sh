@@ -12,6 +12,7 @@
 #
 # Usage: bash scripts/smoke-migrate-archive-layout.sh   # 0 = pass, 1 = fail.
 set -uo pipefail
+unset AUTOPILOT_RUN_ID
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 MIGRATE="$SCRIPT_DIR/migrate-archive-layout.sh"

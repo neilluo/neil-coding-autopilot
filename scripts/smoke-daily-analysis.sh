@@ -15,6 +15,7 @@
 #
 # Usage: bash scripts/smoke-daily-analysis.sh   # 0 = all pass, 1 = failure.
 set -uo pipefail
+unset AUTOPILOT_RUN_ID
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 RUNNER="$SCRIPT_DIR/daily-analysis.sh"
@@ -77,8 +78,8 @@ write_fixture_runs() {  # $1=log_root
   local root="$1"
   mkdir -p "$root/runs" "$root/metrics" "$root/reports"
   cat > "$root/runs/$DATE.jsonl" <<EOF
-{"ts":"${DATE}T01:00:00Z","run_id":"r1","event":"dispatch","stage":"implement","model":"Performance","duration_s":40,"exit_code":0}
-{"ts":"${DATE}T01:01:00Z","run_id":"r1","event":"dispatch","stage":"review","model":"Ultimate","duration_s":25,"exit_code":0}
+{"ts":"${DATE}T01:00:00Z","run_id":"r1","event":"dispatch","stage":"implement","model":"Performance","duration_s":40,"exit_code":0,"input_tokens":100,"output_tokens":20,"cache_read_tokens":30,"cost_usd":0.1}
+{"ts":"${DATE}T01:01:00Z","run_id":"r1","event":"dispatch","stage":"review","model":"Ultimate","duration_s":25,"exit_code":0,"input_tokens":200,"output_tokens":40,"cache_read_tokens":50,"cost_usd":0.2}
 {"ts":"${DATE}T01:02:00Z","run_id":"r1","event":"dispatch","stage":"fix","model":"Performance","duration_s":30,"exit_code":1}
 {"ts":"${DATE}T01:03:00Z","run_id":"r1","event":"round","task":"1","round":1,"verify":"pass","review":"REVIEW_FAIL"}
 {"ts":"${DATE}T01:04:00Z","run_id":"r1","event":"round","task":"1","round":2,"verify":"pass","review":"REVIEW_PASS"}
@@ -94,7 +95,7 @@ run_daily() {  # $1=log_root; remaining args passed through to daily-analysis.sh
   local root="$1"; shift
   rm -f "$CALL_MARKER"
   PATH="$STUB_BIN:$PATH" AUTOPILOT_PLATFORM=qoder AUTOPILOT_TIMEOUT=20 \
-    NEIL_AUTOPILOT_LOG_DIR="$root" bash "$RUNNER" --date "$DATE" "$@"
+    AUTOPILOT_DAILY_MODEL=TestModel NEIL_AUTOPILOT_LOG_DIR="$root" bash "$RUNNER" --date "$DATE" "$@"
 }
 
 # ── scenario 1: fixture runs -> valid, correctly-aggregated metrics.json ─────
@@ -138,6 +139,16 @@ run_scenario_aggregation() {
   [ "$review_fail_rate" = "0.33" ] && pass "aggregation: review_fail_rate=0.33 (1 fail / 3 rounds)" || fail "aggregation: review_fail_rate=$review_fail_rate (expected 0.33)"
   [ "$dispatch_err" = "1" ] && pass "aggregation: dispatch_error_count=1" || fail "aggregation: dispatch_error_count=$dispatch_err (expected 1)"
   [ "$dispatch_to" = "0" ] && pass "aggregation: dispatch_timeout_count=0" || fail "aggregation: dispatch_timeout_count=$dispatch_to (expected 0)"
+
+  local usage_values by_stage by_model
+  usage_values=$(jq -r '[.tokens_input_total, .tokens_output_total, .tokens_cache_read_total, .cost_usd_total, .dispatch_with_usage_count, .dispatch_total_count] | @tsv' "$metrics")
+  [ "$usage_values" = $'300\t60\t80\t0.3\t2\t3' ] && pass "aggregation: token/cost totals and usage coverage correct" || fail "aggregation: usage totals=$usage_values (expected 300/60/80/0.3/2/3)"
+
+  by_stage=$(jq -c '.by_stage' "$metrics")
+  [ "$by_stage" = '{"implement":{"count":1,"duration_s":40,"input_tokens":100,"output_tokens":20,"cost_usd":0.1},"review":{"count":1,"duration_s":25,"input_tokens":200,"output_tokens":40,"cost_usd":0.2},"fix":{"count":1,"duration_s":30,"input_tokens":0,"output_tokens":0,"cost_usd":0}}' ] && pass "aggregation: by_stage correct" || fail "aggregation: by_stage=$by_stage"
+
+  by_model=$(jq -c '.by_model' "$metrics")
+  [ "$by_model" = '{"Performance":{"count":2,"duration_s":70,"input_tokens":100,"output_tokens":20,"cost_usd":0.1},"Ultimate":{"count":1,"duration_s":25,"input_tokens":200,"output_tokens":40,"cost_usd":0.2}}' ] && pass "aggregation: by_model correct" || fail "aggregation: by_model=$by_model"
 
   if [ -f "$CALL_MARKER" ]; then
     pass "aggregation: analysis agent WAS dispatched (new runs present)"

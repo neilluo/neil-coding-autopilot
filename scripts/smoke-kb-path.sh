@@ -9,6 +9,7 @@
 #
 # Usage: bash scripts/smoke-kb-path.sh   # 0 = all pass, 1 = failure.
 set -uo pipefail
+unset AUTOPILOT_RUN_ID
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 KB_PATH="$SCRIPT_DIR/kb-path.sh"

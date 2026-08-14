@@ -132,6 +132,16 @@ def divround(a; b):
   if b == 0 then 0
   else (((a / b) * 100) | round) / 100
   end;
+def cost_sum(items):
+  (((items | map(.cost_usd // 0) | add // 0) * 1000000000000) | round) / 1000000000000;
+def dispatch_summary(items):
+  {
+    count: (items | length),
+    duration_s: (items | map(.duration_s // 0) | add // 0),
+    input_tokens: (items | map(.input_tokens // 0) | add // 0),
+    output_tokens: (items | map(.output_tokens // 0) | add // 0),
+    cost_usd: cost_sum(items)
+  };
 ($events) as $e
 | ($e | map(select(.event == "run"))) as $runs
 | ($e | map(select(.event == "task"))) as $tasks
@@ -158,6 +168,18 @@ def divround(a; b):
     avg_rounds_per_task: divround(($tasks | map(.rounds // 0) | add // 0); $tasks | length),
     dispatch_error_count: ($dev_dispatches | map(select(.exit_code != 0 and .exit_code != 124)) | length),
     dispatch_timeout_count: ($dev_dispatches | map(select(.exit_code == 124)) | length),
+    tokens_input_total: ($dispatches | map(.input_tokens // 0) | add // 0),
+    tokens_output_total: ($dispatches | map(.output_tokens // 0) | add // 0),
+    tokens_cache_read_total: ($dispatches | map(.cache_read_tokens // 0) | add // 0),
+    cost_usd_total: cost_sum($dispatches),
+    dispatch_with_usage_count: ($dispatches | map(select(has("input_tokens") or has("output_tokens") or has("cache_read_tokens") or has("cost_usd"))) | length),
+    dispatch_total_count: ($dispatches | length),
+    by_stage: {
+      implement: dispatch_summary($dispatches | map(select(.stage == "implement"))),
+      review: dispatch_summary($dispatches | map(select(.stage == "review"))),
+      fix: dispatch_summary($dispatches | map(select(.stage == "fix")))
+    },
+    by_model: ($dispatches | sort_by(.model // "") | group_by(.model // "") | map({key: (.[0].model // ""), value: dispatch_summary(.)}) | from_entries),
     commit_fail_count: (
       [ $blocked_tasks[] as $t
         | ($rounds | map(select(.run_id == $t.run_id and .task == $t.task)) | sort_by(.round) | last) as $lr

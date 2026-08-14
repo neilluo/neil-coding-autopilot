@@ -9,6 +9,7 @@
 #
 # Usage:  bash scripts/smoke-bash-guard.sh   (0 = all pass, 1 = any failure)
 set -uo pipefail
+unset AUTOPILOT_RUN_ID
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUARD="$SCRIPT_DIR/../hooks/guard-bash-write.sh"
