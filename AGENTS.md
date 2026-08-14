@@ -35,7 +35,7 @@ implement(worker-cli) → verify(编译) → review(reviewer-cli) → fix(worker
 | AUTOPILOT_ANALYZE_MODEL | Ultimate | 需求分析阶段模型（需强推理） |
 | AUTOPILOT_PLAN_MODEL | Ultimate | Task 拆解阶段模型（需强推理） |
 | AUTOPILOT_IMPLEMENTER_MODEL | Performance | 编码型 worker 模型 |
-| AUTOPILOT_REVIEWER_MODEL | Qwen3.8-Max | 审查型 worker 模型（用户指定 reviewer 默认；此前 D16 记为 Performance） |
+| AUTOPILOT_REVIEWER_MODEL | Ultimate | 审查型 worker 模型（需高质量 CR，默认 Ultimate；空输出为 transport 抖动、由重试兜底，与模型无关） |
 | AUTOPILOT_FIXER_MODEL | Performance | 修复型 worker 模型 |
 | AUTOPILOT_INIT_MODEL | Performance | Harness 初始化阶段模型 |
 | AUTOPILOT_EVOLVE_MODEL | Ultimate | 知识沉淀阶段模型（需强归纳） |

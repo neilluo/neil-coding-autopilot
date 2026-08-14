@@ -20,7 +20,7 @@
 #   --cwd DIR          Project root where verify/commit run (default: $PWD).
 #   --tasks FILE       tasks.md path (default: <change-dir>/tasks.md).
 #   --impl-model M     implementer/fixer model (default: $AUTOPILOT_IMPLEMENTER_MODEL or Performance).
-#   --review-model M   reviewer model    (default: $AUTOPILOT_REVIEWER_MODEL or Qwen3.8-Max).
+#   --review-model M   reviewer model    (default: $AUTOPILOT_REVIEWER_MODEL or Ultimate).
 #   --max-rounds N     max review→fix rounds per task (default: 3).
 #   --resume           skip tasks already marked DONE (default behaviour anyway).
 #   --dry-run          parse & print the plan; do NOT spawn workers or commit.
@@ -67,7 +67,7 @@ CHANGE_DIR=""
 CWD="$PWD"
 TASKS_FILE=""
 IMPL_MODEL="${AUTOPILOT_IMPLEMENTER_MODEL:-Performance}"
-REVIEW_MODEL="${AUTOPILOT_REVIEWER_MODEL:-Qwen3.8-Max}"
+REVIEW_MODEL="${AUTOPILOT_REVIEWER_MODEL:-Ultimate}"
 MAX_ROUNDS=3
 RESUME=false
 DRY_RUN=false
@@ -457,7 +457,7 @@ run_task() {
     build_review_prompt "$LOG_DIR/task-$n-review-$round-prompt.md" "$n"
     log "  review (round $round) → dispatch($REVIEW_MODEL)"
     dispatch_with_retry "review" "$REVIEW_MODEL" "$LOG_DIR/task-$n-review-$round-prompt.md" \
-      "审查上述变更文件（逐一读取），回复末尾输出 REVIEW_PASS 或 REVIEW_FAIL（有 CRITICAL/MAJOR 才 FAIL 并列问题）。" \
+      "基于已内联的有界 diff 审查，必要时才打开个别文件确认，回复末尾输出 REVIEW_PASS 或 REVIEW_FAIL（有 CRITICAL/MAJOR 才 FAIL 并列问题）。" \
       "$LOG_DIR/task-$n-review-$round.log"
 
     # Handle transport/timeout for review

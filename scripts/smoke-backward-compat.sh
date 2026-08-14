@@ -117,7 +117,7 @@ else
 fi
 
 AGENTS="$ROOT/AGENTS.md"
-grep -q 'AUTOPILOT_REVIEWER_MODEL.*Qwen3.8-Max' "$AGENTS" && pass "reviewer default change documented" || fail "reviewer default change undocumented"
+grep -q 'AUTOPILOT_REVIEWER_MODEL.*Ultimate' "$AGENTS" && pass "reviewer default change documented" || fail "reviewer default change undocumented"
 grep -q 'NEIL_AUTOPILOT_LOG_DIR.*Library/Logs/neil-autopilot' "$AGENTS" && pass "log-root default change documented" || fail "log-root default change undocumented"
 allowed='AUTOPILOT_REVIEWER_MODEL|NEIL_AUTOPILOT_LOG_DIR'
 extract_defaults() {
