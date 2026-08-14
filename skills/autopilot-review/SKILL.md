@@ -113,6 +113,20 @@ ocr review --diff /tmp/task-diff.patch
 
 > 例：某 Java 项目在 SCHEMA 里要求"每张表 ext_info 写 traceId"→ 作为该项目的 Major 项；某 Python 项目要求"文件 I/O 必须 encoding=utf-8"→ 作为该项目的 Major 项。**规则来自被审项目，不来自本 skill。**
 
+### 前端 UX 维度（diff 命中前端路径时追加）
+
+当 `/tmp/review-files.txt` 含前端源码（`*.tsx`/`*.jsx`/`*.css`/`*.less`/`*.scss`，或 `**/web/**`、`src/components/**`），除上述维度外，追加 `neil-ux-review` 的**静态/离线层**校验（不需起服务）：
+
+1. 跑反模式扫描：`bash ~/.qoder/skills/neil-ux-review/scripts/sweep-static.sh <前端 src 目录>`，把命中作为候选点。
+2. 读 `~/.qoder/skills/neil-ux-review/references/rule-index.md`，把其中**阻断级(B)规则**作为本次 CR 的 **Major** 项，尤其：
+   - `DT-01` 缺失/null 被渲染成 `0`（应：表格 `-`、无数据 `--`、图表断点不连线）——数据正确性红线，比样式更致命
+   - `A11Y-03/11` 焦点环丢失 / 图标按钮无 `aria-label`
+   - `CS-01` 组件内新增硬编码色值（应走 token）
+   - `SF-01/06` 缺 loading/empty/error/partial 四态 / 自动刷新不可暂停
+3. 运行时层（axe 对比度 / 键盘遍历 / 3 主题×3 视口截图矩阵，见 `neil-ux-review` P2）**需要起前端服务，不在 CR 内强制**；CR 环境若已有运行实例，可选跑 `neil-ux-review/scripts/probe-runtime.sh`。
+
+> 规则全文与 antd/ECharts 修法见 `neil-ux-review/references/`。此维度让前端改动的 UX/无障碍/数据正确性成为 CR 一等门禁，而非事后补。若 `neil-ux-review` 未安装则跳过（记 SKIPPED，不阻塞）。
+
 ## 约束
 
 - 最多循环 3 轮 CR（防止无限修复）

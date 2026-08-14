@@ -112,6 +112,7 @@ flowchart TD
 | `autopilot-finish` | 顶层阶段 | 分支完成与合并：创建 PR 或合并到主干，触发 CI/CD |
 | `autopilot-evolve` | 顶层阶段 | 知识三层沉淀（raw → wiki）+ 门禁化回写 AGENTS.md，把 CR 发现的规律性问题写回知识库 |
 | `autopilot-checkpoint` | 门禁 | 工作流状态验证，阻止跳步；每个阶段完成时调用 |
+| `neil-ux-review` | 横切能力 | UX/交互/无障碍审查与改进（88 条规则库 + ESLint/axe/Playwright/Lighthouse 探针 + 反模式红线），可独立触发或被 `autopilot-review` 复用 |
 
 ## 底层脚本原语
 
