@@ -87,20 +87,48 @@ else
   echo 'SKIP: timeout/gtimeout unavailable; force-kill scenario cannot run'
 fi
 
-# qoder JSON result restoration, raw retention, usage metadata, and is_error exit.
+# qoder JSON path (opt-in via AUTOPILOT_USAGE_JSON=1): result restoration, raw
+# retention, usage metadata, is_error exit. NOTE: json is OFF by default because
+# `-o json` breaks agentic tool execution (see dispatch.sh comment); these cases
+# therefore must enable it explicitly.
 if command -v jq >/dev/null 2>&1; then
   make_stub qodercli 'printf '\''%s\n'\'' '\''{"result":"report\\n**Status:** DONE","usage":{"input_tokens":101,"output_tokens":202,"cache_read_input_tokens":303,"context_usage_ratio":0.25},"total_cost_usd":0.0123,"num_turns":4,"duration_api_ms":567,"is_error":false}'\'''
   LOG="$ROOT/log"; mkdir -p "$LOG"
-  run_capture "$ROOT/out" "$ROOT/err" env PATH="$BIN:$PATH" HOME="$ROOT" NEIL_AUTOPILOT_LOG_DIR="$LOG" NEIL_AUTOPILOT_RUN_ID=smoke AUTOPILOT_RUN_ID=smoke AUTOPILOT_PLATFORM=qoder AUTOPILOT_STAGE=review AUTOPILOT_ATTEMPT=2 AUTOPILOT_RAW_JSON="$ROOT/raw.json" bash "$DISPATCH" --model TestModel --cwd "$ROOT" --prompt-file "$ROOT/prompt.md" --instruction x --timeout 5
+  run_capture "$ROOT/out" "$ROOT/err" env PATH="$BIN:$PATH" HOME="$ROOT" NEIL_AUTOPILOT_LOG_DIR="$LOG" NEIL_AUTOPILOT_RUN_ID=smoke AUTOPILOT_RUN_ID=smoke AUTOPILOT_PLATFORM=qoder AUTOPILOT_STAGE=review AUTOPILOT_ATTEMPT=2 AUTOPILOT_USAGE_JSON=1 AUTOPILOT_RAW_JSON="$ROOT/raw.json" bash "$DISPATCH" --model TestModel --cwd "$ROOT" --prompt-file "$ROOT/prompt.md" --instruction x --timeout 5
   assert_contains "$(<"$ROOT/out")" '**Status:** DONE' 'JSON result restored to stdout'
   jq -e '.result | contains("**Status:** DONE")' "$ROOT/raw.json" >/dev/null && pass 'raw JSON retained' || fail 'raw JSON retained'
   jsonl="$(ls "$LOG/runs"/*.jsonl | head -1)"
   jq -e -s '.[-1] | .input_tokens==101 and .output_tokens==202 and .cache_read_tokens==303 and .cost_usd==0.0123 and .context_ratio==0.25 and .num_turns==4 and .api_ms==567 and .attempt==2 and .prompt_bytes==18 and .output_bytes>0 and (.failure_class|not)' "$jsonl" >/dev/null && pass 'usage and always-on metadata emitted' || fail 'usage and always-on metadata emitted'
   make_stub qodercli 'printf '\''%s\n'\'' '\''{"result":"bad","is_error":true}'\'''
-  run_capture "$ROOT/out" "$ROOT/err" env PATH="$BIN:$PATH" AUTOPILOT_PLATFORM=qoder bash "$DISPATCH" --model TestModel --cwd "$ROOT" --prompt-file "$ROOT/prompt.md" --instruction x --timeout 5
+  run_capture "$ROOT/out" "$ROOT/err" env PATH="$BIN:$PATH" AUTOPILOT_PLATFORM=qoder AUTOPILOT_USAGE_JSON=1 bash "$DISPATCH" --model TestModel --cwd "$ROOT" --prompt-file "$ROOT/prompt.md" --instruction x --timeout 5
   [ "$RUN_RC" -eq 1 ] && pass 'is_error forces exit 1' || fail "is_error forces exit 1 (rc=$RUN_RC)"
 else
   echo 'SKIP: jq unavailable; JSON extraction scenario cannot run'
+fi
+
+# --- Regression guards for the `-o json` tool-execution defect -----------------
+# Root cause (measured on qodercli 1.0.16, 5 runs each on one file-creating task):
+#   with `-o json`  0/5 succeeded (all num_turns=1 / stop_reason=tool_use, zero files
+#                   changed) ; without it 3/5 ; without it + no-preamble prompt 5/5.
+# So json must stay opt-in, and the no-preamble prefix must always reach the worker.
+ARGLOG="$ROOT/argv.log"
+make_stub qodercli 'printf "%s\n" "$*" >> "'"$ARGLOG"'"; printf "%s\n" "**Status:** DONE"'
+: > "$ARGLOG"
+run_capture "$ROOT/out" "$ROOT/err" env PATH="$BIN:$PATH" AUTOPILOT_PLATFORM=qoder bash "$DISPATCH" --model TestModel --cwd "$ROOT" --prompt-file "$ROOT/prompt.md" --instruction "reply OK" --timeout 5
+if grep -q -- '-o json' "$ARGLOG"; then fail 'json output is OFF by default'; else pass 'json output is OFF by default'; fi
+assert_contains "$(<"$ARGLOG")" '严禁输出任何解释' 'no-preamble prefix reaches worker'
+
+: > "$ARGLOG"
+run_capture "$ROOT/out" "$ROOT/err" env PATH="$BIN:$PATH" AUTOPILOT_PLATFORM=qoder AUTOPILOT_USAGE_JSON=1 bash "$DISPATCH" --model TestModel --cwd "$ROOT" --prompt-file "$ROOT/prompt.md" --instruction "reply OK" --timeout 5
+if grep -q -- '-o json' "$ARGLOG"; then pass 'json output honours explicit opt-in'; else fail 'json output honours explicit opt-in'; fi
+
+# stop_reason=tool_use with rc=0 means the worker never executed its tool call:
+# must surface as TRUNCATED_TOOL_USE + rc 125, never as a silent success.
+if command -v jq >/dev/null 2>&1; then
+  make_stub qodercli 'printf '"'"'%s\n'"'"' '"'"'{"result":"","stop_reason":"tool_use","num_turns":1,"is_error":false}'"'"''
+  run_capture "$ROOT/out" "$ROOT/err" env PATH="$BIN:$PATH" AUTOPILOT_PLATFORM=qoder AUTOPILOT_USAGE_JSON=1 bash "$DISPATCH" --model TestModel --cwd "$ROOT" --prompt-file "$ROOT/prompt.md" --instruction x --timeout 5
+  [ "$RUN_RC" -eq 125 ] && pass 'truncated tool_use exits 125' || fail "truncated tool_use exits 125 (rc=$RUN_RC)"
+  assert_contains "$(<"$ROOT/err")" 'TRUNCATED_TOOL_USE' 'truncation is diagnosed on stderr'
 fi
 
 # jq-unavailable degradation: qoder must retain stdout and telemetry sans usage.
