@@ -35,7 +35,7 @@ implement(worker-cli) → verify(编译) → review(reviewer-cli) → fix(worker
 | AUTOPILOT_ANALYZE_MODEL | Ultimate | 需求分析阶段模型（需强推理） |
 | AUTOPILOT_PLAN_MODEL | Ultimate | Task 拆解阶段模型（需强推理） |
 | AUTOPILOT_IMPLEMENTER_MODEL | Performance | 编码型 worker 模型 |
-| AUTOPILOT_REVIEWER_MODEL | Ultimate | 审查型 worker 模型 |
+| AUTOPILOT_REVIEWER_MODEL | Performance | 审查型 worker 模型（D16：由 Ultimate 调整） |
 | AUTOPILOT_FIXER_MODEL | Performance | 修复型 worker 模型 |
 | AUTOPILOT_INIT_MODEL | Performance | Harness 初始化阶段模型 |
 | AUTOPILOT_EVOLVE_MODEL | Ultimate | 知识沉淀阶段模型（需强归纳） |
