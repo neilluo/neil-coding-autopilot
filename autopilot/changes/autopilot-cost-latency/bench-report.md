@@ -16,11 +16,12 @@ Offline deterministic measurements; no model requests are issued.
 | Review context | 891e78c autopilot(track-a): Task 8 — SKILL.md 渐进式瘦身 + 不变量门禁 | 86381 B | 27057 B | 68.7% |
 | Review context | 90ed816 autopilot(track-a): Task 9 — 文档与知识沉淀 | 85566 B | 19323 B | 77.4% |
 | Review context | b8d3474 autopilot(track-a): Task 10 — 自迭代安全 — 递归护栏 + 并发锁 + smoke 遥测隔离 | 192419 B | 22491 B | 88.3% |
-| Review context | Task 11 worktree | 23862 B | 15654 B | 34.4% |
-| Review context | **Total** | **875669 B** | **203959 B** | **76.7%** |
+| Review context | 756f4b4 autopilot(track-a): Task 11 done (bench 76.7% review / 45% SKILL); Task 12/13 via side-change | 71218 B | 18706 B | 73.7% |
+| Review context | dec4754 autopilot(track-a): Task 14 — no-marker=EMPTY tightening; two OK fixtures gain Status line (semantics noted in spec §12) | 77920 B | 5179 B | 93.4% |
+| Review context | **Total** | **1000945 B** | **212190 B** | **78.8%** |
 | SKILL.md injection | using-neil-autopilot | 16756 B | 9212 B | 45.0% |
 | SKILL.md injection | current skills/* total | N/A | 77572 B | N/A |
 | Replay waste | review/fix transient failures | 0 events | 0 s | 0 s avoidable |
 | Replay waste | blocked/resumed implement replay | N/A | 0 s | 0 s avoidable |
 
-**Conclusion:** Review context changed from 875669 B to 203959 B (76.7% reduction); entry-skill injection changed from 16756 B to 9212 B (45.0% reduction); historical avoidable transient/replay wall time is 0 s / 0 s.
+**Conclusion:** Review context changed from 1000945 B to 212190 B (78.8% reduction); entry-skill injection changed from 16756 B to 9212 B (45.0% reduction); historical avoidable transient/replay wall time is 0 s / 0 s.
