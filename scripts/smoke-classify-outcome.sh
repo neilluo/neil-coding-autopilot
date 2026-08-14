@@ -46,7 +46,7 @@ assert_classification "short nonzero log" 1 "$WORK/short-failure.log" TRANSPORT
 
 assert_classification "missing successful log" 0 "$WORK/missing.log" EMPTY
 
-printf '%300s' '' | tr ' ' x > "$WORK/exactly-300.log"
+{ printf '%300s' '' | tr ' ' x; printf '\n**Status:** DONE\n'; } > "$WORK/exactly-300.log"
 assert_classification "exact threshold success" 0 "$WORK/exactly-300.log" OK
 
 {
@@ -56,7 +56,7 @@ assert_classification "exact threshold success" 0 "$WORK/exactly-300.log" OK
 } > "$WORK/app.log"
 assert_classification "substantive application failure" 1 "$WORK/app.log" APP
 
-printf '%320s' '' | tr ' ' x > "$WORK/ok.log"
+{ printf '%320s' '' | tr ' ' x; printf '\n**Status:** DONE\n'; } > "$WORK/ok.log"
 assert_classification "substantive success" 0 "$WORK/ok.log" OK
 
 assert_classification "exit 124 timeout" 124 "$WORK/transport.log" TIMEOUT
@@ -89,6 +89,28 @@ assert_classification "6KB log tail has 502 but no marker exceeds gate" 1 "$WORK
   printf '**Status:** DONE\n'
 } > "$WORK/short-done.log"
 assert_classification "250B log with Status DONE exit 0" 0 "$WORK/short-done.log" OK
+
+# Task 14: no anchored marker + exit 0 => EMPTY regardless of byte count
+{
+  printf '%s\n' "- Add verdict marker check (REVIEW_PASS/REVIEW_FAIL/**Status:** DONE/**Status:** BLOCKED) before transport"
+  i=0; while [ "$i" -lt 8 ]; do printf 'padding %s to exceed threshold aaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' "$i"; i=$((i+1)); done
+} > "$WORK/t14-truncated.log"
+assert_classification "Task14: no-marker truncated exit0 is EMPTY" 0 "$WORK/t14-truncated.log" EMPTY
+
+# Task 14: same log but toggle off => falls back to OK (byte-only behavior)
+t14_off_actual="$(AUTOPILOT_NO_MARKER_IS_EMPTY=0 bash "$CLASSIFIER" 0 "$WORK/t14-truncated.log")"
+if [ "$t14_off_actual" = "OK" ]; then
+  echo "PASS: Task14 toggle off restores OK"
+else
+  echo "FAIL: Task14 toggle off expected OK got $t14_off_actual"; FAILED=$((FAILED+1))
+fi
+
+# Task 14: 5KB body with trailing Status DONE => OK (marker present, not EMPTY)
+{
+  python3 -c "print('x' * 5120)"
+  printf '**Status:** DONE\n'
+} > "$WORK/t14-longdone.log"
+assert_classification "Task14: 5KB body with DONE marker is OK" 0 "$WORK/t14-longdone.log" OK
 
 if [ "$FAILED" -eq 0 ]; then
   echo "SMOKE(classify-outcome): ALL PASS"

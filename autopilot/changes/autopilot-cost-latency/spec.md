@@ -205,3 +205,7 @@ ANALYZE_STATUS=DONE
 | 行内 `(**Status:** DONE/**Status:** BLOCKED)` | 不匹配 | ✅ 空 |
 | 中文冒号 `Status：DONE` | 匹配 | ✅ `Status：DONE` |
 | 1 字节空日志 | 不匹配 | ✅ 空 |
+
+## 12. Task 14 语义变更说明（合并前须知）
+
+Task 14 引入"exit 0 + 末尾无锚定结论 ⟹ EMPTY（重试）"后，与 Task 13 遗留的一条 smoke fixture 冲突：原 `substantive success` fixture 是"320 字节纯 x、无任何标记、exit 0"期望 `OK`。该假设已被 P10 证伪——"有字节数但无结论行"正是**截断**的特征，判 OK 会放过截断。据此把该 fixture 升级为"320 字节 + 末尾 `**Status:** DONE` 独占行"，**保留其验证 OK 的意图**、同时符合 worker prompt 强制的"末尾必须有 Status 行"契约。这是两处既有断言的 fixture 内容调整（substantive success + exact threshold success，均补末尾 Status 行）（非删除、非弱化）：它现在测的是"有结论的成功"，而"无结论的长输出"改由 Task 14 的新断言覆盖为 EMPTY。开关 `AUTOPILOT_NO_MARKER_IS_EMPTY=0` 可整体回退到旧的按字节判定。

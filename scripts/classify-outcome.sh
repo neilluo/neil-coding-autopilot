@@ -49,6 +49,15 @@ if [ "$status_marker" != "UNKNOWN" ] || [ "$review_marker" != "UNKNOWN" ]; then
   exit 0
 fi
 
+# 2.5) no anchored marker at all = worker gave no conclusion (spec Task 14)
+#      exit 0 + no marker => EMPTY (retry), regardless of byte count.
+#      Toggle off with AUTOPILOT_NO_MARKER_IS_EMPTY=0 to restore byte-only behavior.
+no_marker_is_empty="${AUTOPILOT_NO_MARKER_IS_EMPTY:-1}"
+if [ "$no_marker_is_empty" = "1" ] && [ "$exit_code" = "0" ]; then
+  printf '%s\n' EMPTY
+  exit 0
+fi
+
 # 3) transport regex: only when log_bytes < transport_threshold, only on tail -20
 if [ "$log_bytes" -lt "$transport_threshold" ] && [ -f "$log_file" ]; then
   if tail -20 "$log_file" | grep -qiE "$TRANSPORT_PATTERN"; then
