@@ -20,7 +20,7 @@
 #   --cwd DIR          Project root where verify/commit run (default: $PWD).
 #   --tasks FILE       tasks.md path (default: <change-dir>/tasks.md).
 #   --impl-model M     implementer/fixer model (default: $AUTOPILOT_IMPLEMENTER_MODEL or Performance).
-#   --review-model M   reviewer model    (default: $AUTOPILOT_REVIEWER_MODEL or Ultimate).
+#   --review-model M   reviewer model    (default: $AUTOPILOT_REVIEWER_MODEL or Qwen3.8-Max).
 #   --max-rounds N     max review→fix rounds per task (default: 3).
 #   --resume           skip tasks already marked DONE (default behaviour anyway).
 #   --dry-run          parse & print the plan; do NOT spawn workers or commit.
@@ -67,7 +67,7 @@ CHANGE_DIR=""
 CWD="$PWD"
 TASKS_FILE=""
 IMPL_MODEL="${AUTOPILOT_IMPLEMENTER_MODEL:-Performance}"
-REVIEW_MODEL="${AUTOPILOT_REVIEWER_MODEL:-Ultimate}"
+REVIEW_MODEL="${AUTOPILOT_REVIEWER_MODEL:-Qwen3.8-Max}"
 MAX_ROUNDS=3
 RESUME=false
 DRY_RUN=false
