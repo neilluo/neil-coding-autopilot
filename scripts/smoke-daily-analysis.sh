@@ -43,6 +43,10 @@ DATE="2026-07-18"
 #   none       -> write nothing (missing-fragment scenario)
 #   nonarray   -> write a JSON object, not an array (rejected-fragment scenario)
 #   marker     -> just record that it was invoked (used to prove "never called")
+#   silent     -> write NOTHING at all and print nothing (reproduces the real
+#                 thinking-only turn: rc=0, no report, no verdict line)
+#   silent_then_ok -> stay silent until $SILENT_UNTIL attempts have been burned,
+#                 then write the report (proves retry stops as soon as it lands)
 STUB_BIN="$WORK/bin"; mkdir -p "$STUB_BIN"
 CALL_MARKER="$WORK/qodercli-was-called"
 cat > "$STUB_BIN/qodercli" <<'STUB'
@@ -62,6 +66,21 @@ if ! grep -q "数据分析 agent" "$attach" 2>/dev/null; then
 fi
 root="${NEIL_AUTOPILOT_LOG_DIR:-}"
 d="${AUTOPILOT_RUN_ID:-}"
+case "${STUB_MODE:-fragment}" in
+  silent)
+    # 真实故障形状：模型把回合收在 thinking 里 —— rc=0、无输出、不写文件。
+    printf '%s\n' "$(( ${ATTEMPT_LOG_N:-0} ))" >> "$CALL_MARKER.count"
+    exit 0
+    ;;
+  silent_then_ok)
+    printf 'x\n' >> "$CALL_MARKER.count"
+    if [ "$(wc -l < "$CALL_MARKER.count" | tr -d '[:space:]')" -lt "${SILENT_UNTIL:-2}" ]; then exit 0; fi
+    mkdir -p "$root/reports"
+    echo "# stub report for $d (late attempt)" > "$root/reports/$d.md"
+    echo "**Status:** DONE"
+    exit 0
+    ;;
+esac
 mkdir -p "$root/reports" "$root/metrics"
 echo "# stub report for $d" > "$root/reports/$d.md"
 case "${STUB_MODE:-fragment}" in
@@ -81,6 +100,10 @@ write_fixture_runs() {  # $1=log_root
 {"ts":"${DATE}T01:00:00Z","run_id":"r1","event":"dispatch","stage":"implement","model":"Performance","duration_s":40,"exit_code":0,"input_tokens":100,"output_tokens":20,"cache_read_tokens":30,"cost_usd":0.1}
 {"ts":"${DATE}T01:01:00Z","run_id":"r1","event":"dispatch","stage":"review","model":"Ultimate","duration_s":25,"exit_code":0,"input_tokens":200,"output_tokens":40,"cache_read_tokens":50,"cost_usd":0.2}
 {"ts":"${DATE}T01:02:00Z","run_id":"r1","event":"dispatch","stage":"fix","model":"Performance","duration_s":30,"exit_code":1}
+{"ts":"${DATE}T01:03:00Z","run_id":"r1","event":"dispatch","stage":"review","model":"Ultimate","duration_s":16,"exit_code":0,"failure_class":"SILENT_COMPLETION"}
+{"ts":"${DATE}T01:04:00Z","run_id":"r1","event":"dispatch","stage":"implement","model":"Performance","duration_s":9,"exit_code":0,"failure_class":"SILENT"}
+{"ts":"${DATE}T01:05:30Z","run_id":"smoke-20260815-000001","event":"dispatch","stage":"implement","model":"Performance","duration_s":999,"exit_code":1,"input_tokens":99999,"cost_usd":99.9}
+{"ts":"${DATE}T01:05:40Z","run_id":"r9","event":"dispatch","stage":"review","model":"TestModel","duration_s":888,"exit_code":1,"input_tokens":88888,"cost_usd":88.8}
 {"ts":"${DATE}T01:03:00Z","run_id":"r1","event":"round","task":"1","round":1,"verify":"pass","review":"REVIEW_FAIL"}
 {"ts":"${DATE}T01:04:00Z","run_id":"r1","event":"round","task":"1","round":2,"verify":"pass","review":"REVIEW_PASS"}
 {"ts":"${DATE}T01:05:00Z","run_id":"r1","event":"task","task":"1","title":"t1","final_status":"DONE","rounds":2,"committed":true}
@@ -139,16 +162,35 @@ run_scenario_aggregation() {
   [ "$review_fail_rate" = "0.33" ] && pass "aggregation: review_fail_rate=0.33 (1 fail / 3 rounds)" || fail "aggregation: review_fail_rate=$review_fail_rate (expected 0.33)"
   [ "$dispatch_err" = "1" ] && pass "aggregation: dispatch_error_count=1" || fail "aggregation: dispatch_error_count=$dispatch_err (expected 1)"
   [ "$dispatch_to" = "0" ] && pass "aggregation: dispatch_timeout_count=0" || fail "aggregation: dispatch_timeout_count=$dispatch_to (expected 0)"
+  # 静默回合必须可数：它们 exit_code=0，不计入 error/timeout，若不单独聚合就会
+  # 花了 token 却在每日报告里完全隐形（这正是它一直没被发现的原因）。
+  silent_vals=$(jq -r '[.dispatch_silent_count, .dispatch_silent_dirty_count, .dispatch_silent_seconds] | @tsv' "$metrics")
+  if [ "$silent_vals" = "$(printf '1\t1\t25')" ]; then
+    pass "aggregation: silent-turn counters correct (1 silent / 1 silent-dirty / 25s)"
+  else
+    fail "aggregation: silent counters=$silent_vals (expected 1/1/25)"
+  fi
+  # 消费端必须排除测试事件：fixture 里埋了两条量级很大的假事件（run_id smoke-*
+  # 与 model=TestModel，各带 999s/99.9美元 与 888s/88.8美元）。若过滤失效，上面的
+  # token/成本/by_stage 断言会立即翻车——这就是它们的作用。这里再直接查一道。
+  polluted=$(jq -r '[.cost_usd_total, .dispatch_total_count] | @tsv' "$metrics")
+  if [ "$polluted" = "$(printf '0.3\t5')" ]; then
+    pass "aggregation: smoke/TestModel events are excluded at the consumer"
+  else
+    fail "aggregation: test events leaked into metrics ($polluted)"
+  fi
 
   local usage_values by_stage by_model
   usage_values=$(jq -r '[.tokens_input_total, .tokens_output_total, .tokens_cache_read_total, .cost_usd_total, .dispatch_with_usage_count, .dispatch_total_count] | @tsv' "$metrics")
-  [ "$usage_values" = $'300\t60\t80\t0.3\t2\t3' ] && pass "aggregation: token/cost totals and usage coverage correct" || fail "aggregation: usage totals=$usage_values (expected 300/60/80/0.3/2/3)"
+  # fixture 含 5 条 dispatch（其中 2 条是静默回合，无 usage 字段）。静默回合也要计入
+  # 总数与时长：它们确实发生了、也确实花了时间，只是没回报结论。
+  [ "$usage_values" = $'300\t60\t80\t0.3\t2\t5' ] && pass "aggregation: token/cost totals and usage coverage correct" || fail "aggregation: usage totals=$usage_values (expected 300/60/80/0.3/2/5)"
 
   by_stage=$(jq -c '.by_stage' "$metrics")
-  [ "$by_stage" = '{"implement":{"count":1,"duration_s":40,"input_tokens":100,"output_tokens":20,"cost_usd":0.1},"review":{"count":1,"duration_s":25,"input_tokens":200,"output_tokens":40,"cost_usd":0.2},"fix":{"count":1,"duration_s":30,"input_tokens":0,"output_tokens":0,"cost_usd":0}}' ] && pass "aggregation: by_stage correct" || fail "aggregation: by_stage=$by_stage"
+  [ "$by_stage" = '{"implement":{"count":2,"duration_s":49,"input_tokens":100,"output_tokens":20,"cost_usd":0.1},"review":{"count":2,"duration_s":41,"input_tokens":200,"output_tokens":40,"cost_usd":0.2},"fix":{"count":1,"duration_s":30,"input_tokens":0,"output_tokens":0,"cost_usd":0}}' ] && pass "aggregation: by_stage correct" || fail "aggregation: by_stage=$by_stage"
 
   by_model=$(jq -c '.by_model' "$metrics")
-  [ "$by_model" = '{"Performance":{"count":2,"duration_s":70,"input_tokens":100,"output_tokens":20,"cost_usd":0.1},"Ultimate":{"count":1,"duration_s":25,"input_tokens":200,"output_tokens":40,"cost_usd":0.2}}' ] && pass "aggregation: by_model correct" || fail "aggregation: by_model=$by_model"
+  [ "$by_model" = '{"Performance":{"count":3,"duration_s":79,"input_tokens":100,"output_tokens":20,"cost_usd":0.1},"Ultimate":{"count":2,"duration_s":41,"input_tokens":200,"output_tokens":40,"cost_usd":0.2}}' ] && pass "aggregation: by_model correct" || fail "aggregation: by_model=$by_model"
 
   if [ -f "$CALL_MARKER" ]; then
     pass "aggregation: analysis agent WAS dispatched (new runs present)"
@@ -272,6 +314,45 @@ run_scenario_dry_run() {
   unset STUB_MODE
 }
 run_scenario_dry_run
+
+# ── scenario 6: 静默 agent —— 必须重试到耗尽、且绝不假报成功 ───────────────
+# 真实事故：dispatch rc=0 但 agent 一个字未写，旧代码照样打印「done: report(s) under…」，
+# 于是 reports/ 从 7 月起一直是空的却无人发现。
+run_scenario_silent_exhausted() {
+  local root="$WORK/root-silent" out="$WORK/silent.log"
+  write_fixture_runs "$root"
+  rm -f "$CALL_MARKER.count"
+  STUB_MODE=silent AUTOPILOT_DAILY_RETRIES=3 \
+    NEIL_AUTOPILOT_LOG_DIR="$root" PATH="$STUB_BIN:$PATH" AUTOPILOT_PLATFORM=qoder \
+    bash "$RUNNER" --date "$DATE" > "$out" 2>&1
+  local rc=$? calls
+  calls=$(wc -l < "$CALL_MARKER.count" 2>/dev/null | tr -d '[:space:]'); calls="${calls:-0}"
+  [ "$calls" = "3" ] && pass "silent agent: retried exactly 3 times" || fail "silent agent: dispatched $calls times (expected 3)"
+  [ ! -s "$root/reports/$DATE.md" ] && pass "silent agent: no report written" || fail "silent agent: a report appeared unexpectedly"
+  grep -q "no report was produced" "$out" && pass "silent agent: failure is reported, not masked as done" || { fail "silent agent: missing-report was masked"; tail -6 "$out" | sed 's/^/    | /'; }
+  if grep -qE '^\[daily-analysis\] done: report' "$out"; then fail "silent agent: still claims 'done: report(s)'"; else pass "silent agent: does not claim a report exists"; fi
+  [ -s "$root/metrics/$DATE.json" ] && pass "silent agent: metrics still valid" || fail "silent agent: metrics missing"
+  [ "$rc" = "0" ] && pass "silent agent: exit 0 (metrics path still succeeds)" || fail "silent agent: exit=$rc"
+  unset STUB_MODE
+}
+run_scenario_silent_exhausted
+
+# ── scenario 7: 第 2 次才写出报告 —— 重试必须在落盘后立即停（不白烧 token）────
+run_scenario_silent_then_ok() {
+  local root="$WORK/root-late" out="$WORK/late.log"
+  write_fixture_runs "$root"
+  rm -f "$CALL_MARKER.count"
+  STUB_MODE=silent_then_ok SILENT_UNTIL=2 AUTOPILOT_DAILY_RETRIES=3 \
+    NEIL_AUTOPILOT_LOG_DIR="$root" PATH="$STUB_BIN:$PATH" AUTOPILOT_PLATFORM=qoder \
+    bash "$RUNNER" --date "$DATE" > "$out" 2>&1
+  local calls
+  calls=$(wc -l < "$CALL_MARKER.count" 2>/dev/null | tr -d '[:space:]'); calls="${calls:-0}"
+  [ "$calls" = "2" ] && pass "late report: stopped at attempt 2 (no wasted 3rd call)" || fail "late report: dispatched $calls times (expected 2)"
+  [ -s "$root/reports/$DATE.md" ] && pass "late report: report present" || fail "late report: report missing"
+  grep -q "report verified" "$out" && pass "late report: artifact verification logged" || fail "late report: verification line missing"
+  unset STUB_MODE SILENT_UNTIL
+}
+run_scenario_silent_then_ok
 
 echo ""
 if [ "$FAILED" -eq 0 ]; then

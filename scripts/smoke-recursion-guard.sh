@@ -9,6 +9,10 @@ AUTOPILOT="$SCRIPT_DIR/run-autopilot.sh"
 DISPATCH="$SCRIPT_DIR/dispatch.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+# 遥测隔离无条件覆盖：本脚本会实跑 run-track-a / dispatch，不隔离就会把测试事件
+# 写进生产日志根（开发机 shell 里 NEIL_AUTOPILOT_LOG_DIR 几乎总是已 export）。
+# 下方个别用例仍可在命令行内联该变量来断言遥测内容。
+export NEIL_AUTOPILOT_LOG_DIR="$WORK/telemetry"
 FAILED=0
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1" >&2; FAILED=1; }
@@ -65,14 +69,20 @@ run_capture "$WORK/out" "$WORK/err" env AUTOPILOT_ROLE=worker AUTOPILOT_PLATFORM
 run_capture "$WORK/out" "$WORK/err" env AUTOPILOT_ROLE=worker AUTOPILOT_PLATFORM=qoder AUTOPILOT_USAGE_JSON=0 PATH="$WORK/bin:$PATH" bash "$DISPATCH" --model TestModel --cwd "$PROJECT" --prompt-file "$WORK/prompt.md" --instruction x --timeout 0
 [ "$RC" -eq 0 ] && pass 'dispatch permits nested TestModel' || fail 'dispatch TestModel exception'
 
-mkdir "$CHANGE/.lock"
-printf '%s\n' "$$" > "$CHANGE/.lock/pid"
-printf '%s\n' "$(date +%s)" > "$CHANGE/.lock/epoch"
-run_capture "$WORK/out" "$WORK/err" env AUTOPILOT_ALLOW_NESTED=1 bash "$RUNNER" --dry-run --change-dir "$CHANGE" --cwd "$PROJECT"
+# 锁已从 $CHANGE/.lock 移到 TMPDIR（否则 git add -A 会把它提进业务仓库），
+# 这里用 AUTOPILOT_LOCK_DIR 显式指定一个可断言的路径，不再依赖它落在哪里。
+LOCKD="$WORK/track-a.lock"
+mkdir "$LOCKD"
+printf '%s\n' "$$" > "$LOCKD/pid"
+printf '%s\n' "$(date +%s)" > "$LOCKD/epoch"
+run_capture "$WORK/out" "$WORK/err" env AUTOPILOT_ALLOW_NESTED=1 AUTOPILOT_LOCK_DIR="$LOCKD" bash "$RUNNER" --dry-run --change-dir "$CHANGE" --cwd "$PROJECT"
 [ "$RC" -eq 2 ] && grep -q "PID $$" "$WORK/err" && pass 'active lock refuses second runner' || fail 'active lock guard'
-printf '%s\n' "$(( $(date +%s) - 46800 ))" > "$CHANGE/.lock/epoch"
+printf '%s\n' "$(( $(date +%s) - 46800 ))" > "$LOCKD/epoch"
+run_capture "$WORK/out" "$WORK/err" env AUTOPILOT_ALLOW_NESTED=1 AUTOPILOT_LOCK_DIR="$LOCKD" bash "$RUNNER" --dry-run --change-dir "$CHANGE" --cwd "$PROJECT"
+[ "$RC" -ne 2 ] && [ ! -d "$LOCKD" ] && pass '13-hour lock is taken over and cleaned' || fail 'stale lock takeover'
+# 不得回归到业务仓库内加锁。
 run_capture "$WORK/out" "$WORK/err" env AUTOPILOT_ALLOW_NESTED=1 bash "$RUNNER" --dry-run --change-dir "$CHANGE" --cwd "$PROJECT"
-[ "$RC" -ne 2 ] && [ ! -d "$CHANGE/.lock" ] && pass '13-hour lock is taken over and cleaned' || fail 'stale lock takeover'
+[ ! -e "$CHANGE/.lock" ] && pass 'lock never lands inside the consumer repo' || fail 'lock created inside the consumer repo'
 
 run_capture "$WORK/out" "$WORK/err" env AUTOPILOT_ALLOW_NESTED=1 AUTOPILOT_PLATFORM=qoder AUTOPILOT_USAGE_JSON=0 AUTOPILOT_RETRY_BACKOFF_S=0 TMPDIR="$WORK" PATH="$WORK/bin:$PATH" bash "$RUNNER" --change-dir "$CHANGE" --cwd "$PROJECT" --impl-model TestModel --review-model TestModel --max-rounds 1
 PROMPT_DIR="$(ls -dt "$WORK"/autopilot-track-a/smoke-* 2>/dev/null | sed -n '1p')"

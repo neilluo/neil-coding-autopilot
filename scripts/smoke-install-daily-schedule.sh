@@ -97,4 +97,42 @@ if grep -v '^stub:' "$LAUNCHCTL_LOG" | grep -q .; then
   exit 1
 fi
 
+# ── --check-staged：staged 副本过期必须能被发现 ───────────────────────────
+# 过期副本是真实踩过的坑：代码侧修好了，定时任务却一直跑旧副本。用 fixture 目录
+# 验证判定逻辑（不依赖本机真实安装状态，保持 hermetic）。
+CHK_DIR="$TMP/staged-fixture"
+
+# 场景 1：副本不存在 → exit 0（未安装不算错）
+set +e
+AUTOPILOT_STAGED_SCRIPTS="$CHK_DIR" bash "$SCRIPT_DIR/install-daily-schedule.sh" --check-staged > "$TMP/chk-missing.log" 2>&1
+rc_missing=$?
+set -e
+[ "$rc_missing" -eq 0 ] || { echo "missing staged copy should exit 0 (got $rc_missing)" >&2; exit 1; }
+grep -q 'no staged copy' "$TMP/chk-missing.log" || { echo "missing staged copy not reported" >&2; exit 1; }
+
+# 场景 2：副本与仓库一致 → exit 0
+mkdir -p "$CHK_DIR"
+cp "$SCRIPT_DIR"/*.sh "$CHK_DIR/"
+set +e
+AUTOPILOT_STAGED_SCRIPTS="$CHK_DIR" bash "$SCRIPT_DIR/install-daily-schedule.sh" --check-staged > "$TMP/chk-fresh.log" 2>&1
+rc_fresh=$?
+set -e
+[ "$rc_fresh" -eq 0 ] || { echo "fresh staged copy should exit 0 (got $rc_fresh)" >&2; cat "$TMP/chk-fresh.log" >&2; exit 1; }
+grep -q 'up to date' "$TMP/chk-fresh.log" || { echo "fresh staged copy not reported as up to date" >&2; exit 1; }
+
+# 场景 3：副本落后 → exit 3 + 点名具体文件 + 给出刷新命令
+printf '\n# staged copy is now stale\n' >> "$CHK_DIR/daily-analysis.sh"
+set +e
+AUTOPILOT_STAGED_SCRIPTS="$CHK_DIR" bash "$SCRIPT_DIR/install-daily-schedule.sh" --check-staged > "$TMP/chk-stale.log" 2>&1
+rc_stale=$?
+set -e
+[ "$rc_stale" -eq 3 ] || { echo "stale staged copy should exit 3 (got $rc_stale)" >&2; cat "$TMP/chk-stale.log" >&2; exit 1; }
+grep -q 'STALE: daily-analysis.sh' "$TMP/chk-stale.log" || { echo "stale file not named" >&2; exit 1; }
+grep -q -- '--stage-scripts' "$TMP/chk-stale.log" || { echo "refresh command not suggested" >&2; exit 1; }
+# 检测本身绝不能写任何东西（只读）：不得重建 plist 或碰 launchctl。
+if grep -v '^stub:' "$LAUNCHCTL_LOG" | grep -q .; then
+  echo "--check-staged must not touch launchctl" >&2
+  exit 1
+fi
+
 echo "smoke-install-daily-schedule: PASS"

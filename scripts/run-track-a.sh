@@ -98,7 +98,12 @@ case "$MAX_ROUNDS" in ''|*[!0-9]*) echo "ERROR: --max-rounds must be a positive 
 [ "$MAX_ROUNDS" -ge 1 ] || { echo "ERROR: --max-rounds must be >= 1" >&2; exit 1; }
 
 # ── per-change atomic lock ───────────────────────────────────────────────────
-LOCK_DIR="$CHANGE_DIR/.lock"
+# 锁住 TMPDIR，不住业务仓库：这把锁在整个 run 期间持有，而每个 Task 提交都跑
+# `git add -A`，放在 $CHANGE_DIR/.lock 会把 .lock/pid、.lock/epoch 一并提进业务仓库
+# （已在真实端到端跑中观测到，CR 也报了这一条）。同仓的 task-state.sh 与 LOG_DIR
+# 早已遵守「harness 产物不落业务仓库」这个不变量，这里对齐。
+# 以 CHANGE_DIR 路径作键，同一 change 的并发运行仍然互斥；AUTOPILOT_LOCK_DIR 可显式覆盖。
+LOCK_DIR="${AUTOPILOT_LOCK_DIR:-${TMPDIR:-/tmp}/autopilot-track-a-lock$(printf '%s' "$CHANGE_DIR" | tr '/ ' '__')}"
 LOCK_OWNED=false
 acquire_lock() {
   local holder_pid="" lock_epoch="" now age
@@ -248,21 +253,120 @@ dispatch_worker() {
 # ── dispatch with transport/empty retry (spec D2/D3/D4) ─────────────────────
 # Usage: dispatch_with_retry <stage> <model> <prompt-file> <instruction> <base-log>
 # Sets: LAST_WORKER_LOG, WORKER_RC, WORKER_OUTCOME
+#
+# 工作树指纹：用来区分两种同形异质的 EMPTY。真掉线的 worker 不会动文件，重试是安全的；
+# 而「干完活没报数」的 worker（模型把整个回合收在 thinking 里，见 dispatch.sh 同名注释）
+# 已经改过盘，再重试等于让新 worker 在上一个 worker 的半成品上重做同一个 Task。
+# 非 git 目录永远得到同一个签名，因此不会误判为 SILENT。
+worktree_signature() {
+  ( cd "$CWD" 2>/dev/null || exit 0
+    git rev-parse --git-dir >/dev/null 2>&1 || exit 0
+    git status --porcelain 2>/dev/null
+    git diff HEAD 2>/dev/null ) | cksum 2>/dev/null || true
+}
+
+# ── fail-closed stop with an accurate diagnosis ──────────────────────────────
+# 所有不可行动的 worker 结局共用这一个出口。文案必须准确：把「干完活没报数」报成
+# transport failure 曾让人花 35 分钟去查网络，而真因是模型只在 thinking 里收尾。
+fail_closed_stop() {
+  local n="$1" title="$2" round="$3"
+  "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
+  copy_artifact
+  TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
+  telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" "$round" false
+  case "$WORKER_OUTCOME" in
+    TIMEOUT)
+      log "  → stop (fail-closed, timeout)"
+      echo "hint: transient failure — rerun with --resume to continue from this task"
+      ;;
+    SILENT)
+      log "  → stop (fail-closed, silent worker — worktree already modified)"
+      echo "hint: NOT a transport failure — the worker ran tools but never printed a verdict line."
+      echo "      Inspect 'git status' in $CWD, keep or discard those changes, then rerun with --resume."
+      ;;
+    EMPTY)
+      # 静默耗尽（工作树未动）也不是链路故障，不能套用 transport 文案——否则
+      # 又把人往网络方向引。这种情形下重跑是安全的（没有半成品遗留）。
+      log "  → stop (fail-closed, worker stayed silent — no output, worktree untouched)"
+      echo "hint: NOT a transport failure — every attempt ended inside thinking with no text block."
+      echo "      Nothing was written, so rerunning with --resume is safe; consider raising AUTOPILOT_SILENT_RETRIES"
+      echo "      or switching the stage model (see AUTOPILOT_REVIEWER_MODEL) if this repeats."
+      ;;
+    *)
+      log "  → stop (fail-closed, transport)"
+      echo "hint: transient failure — rerun with --resume to continue from this task"
+      ;;
+  esac
+  exit 2
+}
+
 dispatch_with_retry() {
   local stage="$1" model="$2" pfile="$3" instr="$4" base_log="$5"
   local max_attempts="${AUTOPILOT_TRANSPORT_RETRIES:-3}"
+  local silent_attempts="${AUTOPILOT_SILENT_RETRIES:-5}"
+  local switch_after="${AUTOPILOT_SILENT_SWITCH_AFTER:-2}"
+  local fallback_model="${AUTOPILOT_SILENT_FALLBACK_MODEL-Performance}"
   local backoff_base="${AUTOPILOT_RETRY_BACKOFF_S:-5}"
-  local attempt=1 outlog backoff mult i
+  local attempt=1 outlog backoff mult i sig_before sig_after cap
+  local active_model="$model" switched=false
+  # 静默降档：空 = 不传 --reasoning-effort（保留默认完整推理）。只在已经静默过之后才降，
+  # 因为降档会让审查/实现变浅；但总比“一字不发”好。设 AUTOPILOT_SILENT_EFFORT="" 可关闭。
+  local silent_effort="${AUTOPILOT_SILENT_EFFORT-low}" effort=""
 
   [ "$max_attempts" -gt 0 ] || max_attempts=1
+  [ "$silent_attempts" -gt 0 ] || silent_attempts=1
   while true; do
     outlog="${base_log%.log}-a${attempt}.log"
     LAST_WORKER_LOG="$outlog"
+    sig_before="$(worktree_signature)"
 
-    AUTOPILOT_ATTEMPT="$attempt" dispatch_worker "$stage" "$model" "$pfile" "$instr" "$outlog"
+    AUTOPILOT_ATTEMPT="$attempt" AUTOPILOT_REASONING_EFFORT="$effort" \
+      dispatch_worker "$stage" "$active_model" "$pfile" "$instr" "$outlog"
 
     case "$WORKER_OUTCOME" in
       TRANSPORT|EMPTY)
+        sig_after="$(worktree_signature)"
+        if [ "$sig_before" != "$sig_after" ]; then
+          WORKER_OUTCOME=SILENT
+          AUTOPILOT_TM_FAILURE_CLASS=SILENT
+          log "  silent worker (attempt $attempt/$max_attempts): no verdict line, but the worktree changed"
+          log "    → not a dropped connection; refusing to retry on top of its own edits"
+          break
+        fi
+        # 两类失败的正确重试策略完全不同，不能共用一套参数：
+        #   TRANSPORT（限流/连接重置等真链路问题）——等待确实有用，保持指数退避。
+        #   EMPTY（静默回合，工作树未动）——等待毫无意义：模型把回合收进 thinking
+        #   与服务端拥塞无关，睡 20s 不会让下一次更容易开口。实测（Ultimate×8 轮
+        #   review）静默率 ~50%、且每次静默只产出 466B/约 16s；改成立即重试可省掉
+        #   5+10+20=35s 的空等，并把上限单独提高（P(连续 5 次静默)≈3%，而 fail-closed
+        #   停机要搭上整个 Task + 人工介入，代价高得多）。
+        if [ "$WORKER_OUTCOME" = EMPTY ]; then
+          cap="$silent_attempts"
+          if [ "$attempt" -lt "$cap" ]; then
+            log "  silent worker output (attempt $attempt/$cap) → retry immediately (backoff cannot un-silence a thinking-only turn)"
+            # 先降推理档位（直接打击“回合死在 thinking 里”这个成因，实测默认档 1/4 静默
+            # 而 low 档 0/4），它比换模型更便宜也更定向，所以放在前面。
+            if [ -n "$silent_effort" ] && [ "$effort" != "$silent_effort" ]; then
+              log "    → lowering reasoning effort to '$silent_effort' for the remaining attempts"
+              effort="$silent_effort"
+            fi
+            # 静默是模型特性，不是链路抖动：同一 review prompt 实测 Ultimate 8/15 静默（含
+            # 真实遥测 4/7 与控制实验 4/8），而 Performance 0/6、Qwen3.8-Max 0/6，且两者
+            # 都正确找出除零缺陷并给出 REVIEW_FAIL。所以同一个模型反复重试收益有限；
+            # 连续静默后换模型，既保留默认模型开口时的 CR 质量，又不让整个 Task 因它闭嘴
+            # 而 fail-closed（降级模型通常还更便宜、更快）。设 AUTOPILOT_SILENT_FALLBACK_MODEL="" 可关闭。
+            if ! $switched && [ -n "$fallback_model" ] && [ "$attempt" -ge "$switch_after" ] \
+                && [ "$fallback_model" != "$active_model" ]; then
+              log "    → $active_model stayed silent ${attempt}x; switching to $fallback_model for the remaining attempts"
+              active_model="$fallback_model"
+              switched=true
+            fi
+            attempt=$(( attempt + 1 ))
+            continue
+          fi
+          log "  silent worker output (attempt $attempt/$cap) → exhausted"
+          break
+        fi
         if [ "$attempt" -lt "$max_attempts" ]; then
           mult=1
           i=1
@@ -377,31 +481,24 @@ run_task() {
     "实现该 Task：读相关文件→写代码→跑验证命令；回复末尾输出一行 '**Status:** DONE'（做不了则 'BLOCKED' 并说明原因）。" \
     "$LOG_DIR/task-$n-impl.log"
 
-  # Handle transport/timeout exhaustion for implement
+  # Handle transport/silent/timeout exhaustion for implement
+  # SILENT（静默但已改盘）在这里**不**停机：本阶段后面紧跟着 verify 门禁，而本仓的
+  # 原则本就是“控制器自己跑 verify、绝不信自述”——对 implement 而言地面真相是 verify
+  # 通不通，不是那行 Status。实测碰到过：worker 已正确写完文件却未报数，旧逻辑直接
+  # 停机要人工介入，而 verify + 独立 CR 本来就能安全地判它好不好。不变量未被放松：
+  # 仍须 verify 通过 + 独立 CR REVIEW_PASS 才会 commit。
+  IMPL_UNREPORTED=false
   case "$WORKER_OUTCOME" in
-    TRANSPORT|EMPTY)
-      "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
-      copy_artifact
-      TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
-      telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" 0 false
-      log "  → stop (fail-closed, transport)"
-      echo "hint: transient failure — rerun with --resume to continue from this task"
-      exit 2
+    SILENT)
+      IMPL_UNREPORTED=true
+      log "  implement produced changes without a verdict line → letting the verify gate decide (never trusting self-report anyway)"
       ;;
-    TIMEOUT)
-      "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
-      copy_artifact
-      TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
-      telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" 0 false
-      log "  → stop (fail-closed, timeout)"
-      echo "hint: transient failure — rerun with --resume to continue from this task"
-      exit 2
-      ;;
+    TRANSPORT|EMPTY|TIMEOUT) fail_closed_stop "$n" "$title" 0 ;;
   esac
 
   local st
   st="$("$PARSE" "$LAST_WORKER_LOG")"
-  if [ "$st" != "DONE" ] && [ "$st" != "DONE_WITH_CONCERNS" ]; then
+  if [ "$st" != "DONE" ] && [ "$st" != "DONE_WITH_CONCERNS" ] && ! $IMPL_UNREPORTED; then
     "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
     copy_artifact
     TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
@@ -421,26 +518,11 @@ run_task() {
         build_fix_prompt "$n" "$LOG_DIR/task-$n-verify-$round.log" "$LOG_DIR/task-$n-fix-$round-prompt.md"
         dispatch_with_retry "fix" "$IMPL_MODEL" "$LOG_DIR/task-$n-fix-$round-prompt.md" \
           "修复验证失败的问题→重跑验证；回复末尾输出 '**Status:** DONE'。" "$LOG_DIR/task-$n-fix-$round.log"
-        # Handle transport/timeout for fix
+        # Handle transport/silent/timeout for fix
+        # 同 implement：静默但已改盘交给下一轮 verify 判，不靠自述。
         case "$WORKER_OUTCOME" in
-          TRANSPORT|EMPTY)
-            "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
-            copy_artifact
-            TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
-            telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" "$round" false
-            log "  → stop (fail-closed, transport)"
-            echo "hint: transient failure — rerun with --resume to continue from this task"
-            exit 2
-            ;;
-          TIMEOUT)
-            "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
-            copy_artifact
-            TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
-            telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" "$round" false
-            log "  → stop (fail-closed, timeout)"
-            echo "hint: transient failure — rerun with --resume to continue from this task"
-            exit 2
-            ;;
+          SILENT) log "  fix produced changes without a verdict line → re-running the verify gate" ;;
+          TRANSPORT|EMPTY|TIMEOUT) fail_closed_stop "$n" "$title" "$round" ;;
         esac
         continue
       fi
@@ -460,26 +542,9 @@ run_task() {
       "基于已内联的有界 diff 审查，必要时才打开个别文件确认，回复末尾输出 REVIEW_PASS 或 REVIEW_FAIL（有 CRITICAL/MAJOR 才 FAIL 并列问题）。" \
       "$LOG_DIR/task-$n-review-$round.log"
 
-    # Handle transport/timeout for review
+    # Handle transport/silent/timeout for review
     case "$WORKER_OUTCOME" in
-      TRANSPORT|EMPTY)
-        "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
-        copy_artifact
-        TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
-        telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" "$round" false
-        log "  → stop (fail-closed, transport)"
-        echo "hint: transient failure — rerun with --resume to continue from this task"
-        exit 2
-        ;;
-      TIMEOUT)
-        "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
-        copy_artifact
-        TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
-        telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" "$round" false
-        log "  → stop (fail-closed, timeout)"
-        echo "hint: transient failure — rerun with --resume to continue from this task"
-        exit 2
-        ;;
+      TRANSPORT|EMPTY|SILENT|TIMEOUT) fail_closed_stop "$n" "$title" "$round" ;;
     esac
 
     # Only parse review verdict when outcome is OK or APP
@@ -498,26 +563,11 @@ run_task() {
     build_fix_prompt "$n" "$LAST_WORKER_LOG" "$LOG_DIR/task-$n-fix-$round-prompt.md"
     dispatch_with_retry "fix" "$IMPL_MODEL" "$LOG_DIR/task-$n-fix-$round-prompt.md" \
       "按 CR 反馈修复→重跑验证；回复末尾输出 '**Status:** DONE'。" "$LOG_DIR/task-$n-fix-$round.log"
-    # Handle transport/timeout for fix after review
+    # Handle transport/silent/timeout for fix after review
+    # 同上：静默但已改盘继续进下一轮 verify + CR，不把已完成的修复丢弃。
     case "$WORKER_OUTCOME" in
-      TRANSPORT|EMPTY)
-        "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
-        copy_artifact
-        TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
-        telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" "$round" false
-        log "  → stop (fail-closed, transport)"
-        echo "hint: transient failure — rerun with --resume to continue from this task"
-        exit 2
-        ;;
-      TIMEOUT)
-        "$TASK_STATE" "$TASKS_FILE" "$n" "BLOCKED" 2>/dev/null || true
-        copy_artifact
-        TASKS_BLOCKED=$((TASKS_BLOCKED + 1))
-        telemetry_emit_task "${RUN_ID:-}" "$n" "$title" "BLOCKED" "$round" false
-        log "  → stop (fail-closed, timeout)"
-        echo "hint: transient failure — rerun with --resume to continue from this task"
-        exit 2
-        ;;
+      SILENT) log "  fix produced changes without a verdict line → re-running the verify gate" ;;
+      TRANSPORT|EMPTY|TIMEOUT) fail_closed_stop "$n" "$title" "$round" ;;
     esac
   done
 

@@ -8,12 +8,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 CHILD_PID=""
 OUTPUT_FILE=""
+RESULT_FILE=""
 cleanup() {
   if [ -n "$CHILD_PID" ] && kill -0 "$CHILD_PID" 2>/dev/null; then
     kill -TERM "$CHILD_PID" 2>/dev/null || true
     wait "$CHILD_PID" 2>/dev/null || true
   fi
   [ -z "$OUTPUT_FILE" ] || rm -f "$OUTPUT_FILE"
+  [ -z "$RESULT_FILE" ] || rm -f "$RESULT_FILE"
 }
 trap cleanup EXIT SIGTERM SIGINT
 
@@ -134,18 +136,56 @@ run_worker() {
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" != 0 ] && [ "$WORKER_RC" -eq 137 ]; then WORKER_RC=124; fi
 }
 
-# 「禁前言」铁律：模型若先输出叙述/计划文本再发起工具调用，headless CLI 会停在
-# stop_reason=tool_use 且不执行工具。实测加上该前缀后成功率从 3/5 升到 5/5，
-# 因此把它固化在 dispatch 内部，任何调用方都自动获得，不依赖各处 prompt 自觉。
-QODER_INSTRUCTION="【严禁输出任何解释、计划、前言或总结文字。立即直接调用工具动手执行，不要先说你要做什么。】${INSTRUCTION}"
+# 「禁前言、但必须收尾报数」双约束。历史上这里只有「禁前言」且措辞是「严禁输出任何
+# ……总结文字」，与上层 tasks 要求的「回复末尾必须输出 **Status:** DONE」直接矛盾，
+# 后果实测如下（qodercli 1.0.16 + 思维链模型，session jsonl 取证）：
+#   模型把整个回合都塞进 thinking/redacted_thinking，不产出任何 text 块 → CLI 只打印
+#   text，于是 stdout 零字节；classify-outcome 见「rc=0 且无锚定 marker」判 EMPTY，
+#   上层当成掉线重试到耗尽后 fail-closed。最坑的是活其实干完了：有 session 记录为
+#   thinking→tool_use×11→thinking 收尾，文件已落盘却因「一言不发」被判失败并丢弃。
+# 因此措辞必须精确到「阶段」：动手前禁止叙述，完工后必须输出结论标记行。
+# 两个易错点（均已在真实端到端跑中暴露）：
+#   ① 不能说「结论行是唯一允许的输出」——reviewer 的交付物本身就是审查正文，
+#     那样写等于禁止它写 CR，实测下 reviewer 连续两次静默、第三次才交出正文。
+#   ② 不能硬命令「立即调用工具」——只读审查可能根本不需要工具，得给它直接下结论的路。
+# 标记形式不写死（run-track-a 用 **Status:** / REVIEW_PASS，run-autopilot 用 FINISH_STATUS=），
+# 统一指向提示词自带的「报告格式」段，与 parse-markers.sh 能识别的集合保持一致。
+# 固化在 dispatch 内部，任何调用方自动获得，不依赖各处 prompt 自觉。
+#
+# 按阶段分化（遥测驱动）：同一天的真实数据里 implement 静默率 2/24=8.3%，
+# review 却是 4/7=57%（浪费 66s 的 Ultimate 调用）——相差 7 倍。原因不是模型好坏：
+# implement 天然要发 tool_use，“少说话”于它无害；而 reviewer 的交付物就是那段文字，
+# 压制文本通道等于压制它干活，于是整个回合滞留在 thinking 里。所以以文字为交付物的
+# 阶段（review / analyze-daily）不再背「禁前言」，只禁「复述任务/预告动作」。
+case "$STAGE" in
+  review|analyze-daily)
+    QODER_INSTRUCTION="【直接给结论：不要复述任务、不要宣布你接下来要做什么，需要看文件就直接看。你的交付物就是回复正文里的结论与依据，该写多少就写多少；并在正文末尾输出提示词「报告格式/结论」要求的标记行（如 REVIEW_PASS、REVIEW_FAIL 或 **Status:** DONE）。只在思考过程里得出结论而正文不写，等于没交付，会被判为失败。】${INSTRUCTION}"
+    ;;
+  *)
+    QODER_INSTRUCTION="【先动手、后说话：动手之前严禁输出解释、计划或前言，直接开始调用工具；本任务若无需工具则直接给结论。工作完成后，必须按提示词「报告格式」在回复末尾输出结论标记行（如 **Status:** DONE、REVIEW_PASS 或 FINISH_STATUS=DONE）；该行必须出现在回复正文里。只在思考过程里收尾、正文不写该行，等于没交付，会被判为失败。】${INSTRUCTION}"
+    ;;
+esac
 
 export AUTOPILOT_ROLE=worker
 case "$PLATFORM" in
   qoder)
+    # `--tools default` 显式放开全部内置工具，避免用户级/项目级 settings 把工具集收窄后
+    # headless 工具循环静默不执行。它是 variadic 选项（--tools <tools...>），必须紧跟一个
+    # 选项来终止取值——这里紧邻 -p，切勿在两者之间插入位置参数。
+    #
+    # AUTOPILOT_REASONING_EFFORT：非空则透传 --reasoning-effort。用法是“重试时降档”：
+    # 静默故障的形态就是模型把整个回合花在 thinking 上、不产出 text，降低推理档位
+    # 直接打击该成因。实测（同 prompt / 同模型 / 同调用方式，N=4）：默认档 1/4 静默，
+    # low 档 0/4，且 low 档仍给出实质审查（核对 Verify / 安全 / 边界）。因为会变浅，
+    # 所以绝不做默认值：第一次尝试保留完整质量，只在已经静默过的重试上降档。
+    QODER_ARGS=""
+    if [ -n "${AUTOPILOT_REASONING_EFFORT:-}" ]; then
+      QODER_ARGS="--reasoning-effort ${AUTOPILOT_REASONING_EFFORT}"
+    fi
     if [ "$USE_QODER_JSON" -eq 1 ]; then
-      run_worker qodercli -m "$MODEL" -w "$CWD" --permission-mode bypass_permissions --attachment "$PROMPT_FILE" -p "$QODER_INSTRUCTION" -o json
+      run_worker qodercli -m "$MODEL" -w "$CWD" --permission-mode bypass_permissions --attachment "$PROMPT_FILE" $QODER_ARGS --tools default -p "$QODER_INSTRUCTION" -o json
     else
-      run_worker qodercli -m "$MODEL" -w "$CWD" --permission-mode bypass_permissions --attachment "$PROMPT_FILE" -p "$QODER_INSTRUCTION"
+      run_worker qodercli -m "$MODEL" -w "$CWD" --permission-mode bypass_permissions --attachment "$PROMPT_FILE" $QODER_ARGS --tools default -p "$QODER_INSTRUCTION"
     fi
     ;;
   claude)
@@ -174,6 +214,9 @@ json_value() {
   [ -z "$value" ] || printf -v "$variable" '%s' "$value"
 }
 
+# VERDICT_FILE 始终指向「本次真正吐给上层的字节」。JSON 信封模式下结论行在 .result 里而
+# 不在信封表面，若直接拿信封去找锚定 marker 会把正常报数的 worker 误判为静默。
+VERDICT_FILE="$OUTPUT_FILE"
 if [ "$USE_QODER_JSON" -eq 1 ] && jq -e 'type == "object"' "$OUTPUT_FILE" >/dev/null 2>&1; then
   if [ -n "${AUTOPILOT_RAW_JSON:-}" ]; then cp "$OUTPUT_FILE" "$AUTOPILOT_RAW_JSON"; fi
   json_value AUTOPILOT_TM_INPUT_TOKENS '.usage.input_tokens'
@@ -191,7 +234,10 @@ if [ "$USE_QODER_JSON" -eq 1 ] && jq -e 'type == "object"' "$OUTPUT_FILE" >/dev/
     AUTOPILOT_TM_IS_ERROR=false
   fi
   if jq -e '.result | type == "string" and length > 0' "$OUTPUT_FILE" >/dev/null 2>&1; then
-    jq -j '.result' "$OUTPUT_FILE"
+    RESULT_FILE="$(mktemp "${TMPDIR:-/tmp}/neil-dispatch-result.XXXXXX")"
+    jq -j '.result' "$OUTPUT_FILE" > "$RESULT_FILE"
+    command cat "$RESULT_FILE"
+    VERDICT_FILE="$RESULT_FILE"
   else
     command cat "$OUTPUT_FILE"
   fi
@@ -213,6 +259,22 @@ if [ "$STOP_REASON" = tool_use ] && [ "$WORKER_RC" -eq 0 ]; then
   WORKER_RC=125
   echo "ERROR: TRUNCATED_TOOL_USE - worker stopped at a tool call without executing it (no files changed)." >&2
   echo "       Neither plain-retry nor '-r' resume helps. Unset AUTOPILOT_USAGE_JSON, forbid preamble text in the prompt, shrink the task." >&2
+fi
+# 静默收尾：CLI 自认成功（rc=0）却没给出任何锚定结论行。实测成因是模型把整个回合
+# 收在 thinking/redacted_thinking 里、不产出 text 块，CLI 只打印 text 所以 stdout 为空。
+# 它与链路抖动同形但根因完全不同：工具可能已经跑完、文件已落盘。不改 rc（保持 0
+# 才会被 classify-outcome 归为 EMPTY；改成非 0 反而会被误归为 TRANSPORT），只把真实成因
+# 写进日志，避免下一个人再拿「掉线」去查网络。此处文案切勿出现行首锚定的结论标记，
+# 也切勿出现 classify-outcome 的 TRANSPORT 关键词，否则会自己污染分类结果。
+if [ "$WORKER_RC" -eq 0 ] \
+  && command -v tail >/dev/null 2>&1 && command -v grep >/dev/null 2>&1 \
+  && [ "$("$SCRIPT_DIR/parse-markers.sh" status "$VERDICT_FILE" 2>/dev/null || echo UNKNOWN)" = UNKNOWN ] \
+  && [ "$("$SCRIPT_DIR/parse-markers.sh" review "$VERDICT_FILE" 2>/dev/null || echo UNKNOWN)" = UNKNOWN ]; then
+  AUTOPILOT_TM_FAILURE_CLASS=SILENT_COMPLETION
+  echo "WARN: SILENT_COMPLETION - worker exited 0 but produced no anchored verdict line." >&2
+  echo "      Typical cause: the model ended its turn inside thinking/redacted_thinking and emitted no text block." >&2
+  echo "      This is NOT a dropped connection: tool calls may already have run and files may already be written." >&2
+  echo "      Inspect the worktree before any retry; a blind retry re-runs the task on an already-modified tree." >&2
 fi
 export AUTOPILOT_TM_PROMPT_BYTES AUTOPILOT_TM_OUTPUT_BYTES AUTOPILOT_TM_ATTEMPT
 export AUTOPILOT_TM_INPUT_TOKENS AUTOPILOT_TM_OUTPUT_TOKENS AUTOPILOT_TM_CACHE_READ_TOKENS 2>/dev/null || true

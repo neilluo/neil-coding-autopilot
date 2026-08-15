@@ -142,7 +142,16 @@ def dispatch_summary(items):
     output_tokens: (items | map(.output_tokens // 0) | add // 0),
     cost_usd: cost_sum(items)
   };
-($events) as $e
+# 在消费端排除测试事件（防御纵深）。写侧已经把 smoke 遥测无条件隔离到临时目录，
+# 但历史日志里已经泄进去的假事件不应要求人工清洗才能用：只要聚合时过滤，
+# 无论过去还是未来漏进来的测试数据都不会污染 metrics/。判据两条：
+#   run_id 以 smoke- 开头（smoke 用的 change 目录名就叫 smoke）；model 为 TestModel。
+# 实测过某日 11702 条事件里 10576 条（90.4%）是这两类，如果直接聚合，
+# 自进化建议就是建立在假数据上的。
+($events | map(select(
+    (((.run_id // "") | startswith("smoke-")) | not)
+    and ((.model // "") != "TestModel")
+  ))) as $e
 | ($e | map(select(.event == "run"))) as $runs
 | ($e | map(select(.event == "task"))) as $tasks
 | ($e | map(select(.event == "round"))) as $rounds
@@ -168,6 +177,12 @@ def dispatch_summary(items):
     avg_rounds_per_task: divround(($tasks | map(.rounds // 0) | add // 0); $tasks | length),
     dispatch_error_count: ($dev_dispatches | map(select(.exit_code != 0 and .exit_code != 124)) | length),
     dispatch_timeout_count: ($dev_dispatches | map(select(.exit_code == 124)) | length),
+    # 静默回合（rc=0 但无锚定结论行）在本字段存在之前是不可测的：exit_code 为 0，
+    # 既不计入 error 也不计入 timeout，于是花了真实 token 却在报告里完全隐形。
+    # 分开计：SILENT_COMPLETION=模型只在 thinking 里收尾；SILENT=静默但已改动工作树。
+    dispatch_silent_count: ($dispatches | map(select((.failure_class // "") == "SILENT_COMPLETION")) | length),
+    dispatch_silent_dirty_count: ($dispatches | map(select((.failure_class // "") == "SILENT")) | length),
+    dispatch_silent_seconds: ($dispatches | map(select((.failure_class // "") | test("^SILENT")) | .duration_s // 0) | add // 0),
     tokens_input_total: ($dispatches | map(.input_tokens // 0) | add // 0),
     tokens_output_total: ($dispatches | map(.output_tokens // 0) | add // 0),
     tokens_cache_read_total: ($dispatches | map(.cache_read_tokens // 0) | add // 0),
@@ -252,6 +267,9 @@ build_analysis_prompt() {
     echo "## 产出要求"
     echo "1. 写 $LOG_ROOT/reports/$DATE.md，结构：\`## 体检摘要\` | \`## 趋势\`（对比历史 metrics） | \`## 高频问题\`（定性归类 + 样例链接到 runs/） | \`## 改进建议\`（引用上面角色→落点表） | \`## 免责\`（仅建议，需人工批准，系统绝不自动改插件代码）。"
     echo "2. 可选：把定性归类结果写 ${cats_file}——**只允许一个 JSON 数组**，形如 [{\"category\":\"空值/边界未检查\",\"count\":4}, ...]；无归类可跳过（不要写空文件/非数组）。"
+    echo
+    echo "## 报告格式（回复末尾必须输出）"
+    echo "- **Status:** DONE（报告已写入）或 BLOCKED（写不了，并说明原因）"
   } > "$out"
 }
 
@@ -260,14 +278,40 @@ RESULT_FILE="$WORK_TMP/analysis-result.md"
 build_analysis_prompt "$PROMPT_FILE"
 
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
-log "dispatching analysis agent (stage=analyze-daily model=$MODEL)"
-if ! AUTOPILOT_STAGE="analyze-daily" AUTOPILOT_RUN_ID="$DATE" \
-    "$DISPATCH" --model "$MODEL" --cwd "$PLUGIN_ROOT" \
-    --prompt-file "$PROMPT_FILE" \
-    --instruction "分析当日遥测数据，写体检报告到 \$LOG_ROOT/reports/，可选写分类片段；只出建议不改代码。" \
-    > "$RESULT_FILE" 2>&1; then
-  log "WARN: analysis agent dispatch failed (see below) — metrics already written, report skipped"
-  tail -20 "$RESULT_FILE" 2>/dev/null | sed 's/^/  | /'
+REPORT_FILE="$LOG_ROOT/reports/$DATE.md"
+# 有界重试：本阶段原本只 dispatch 一次，所以只要碰上一次静默回合（模型把整个
+# 回合收在 thinking 里、不产出 text）当日就永久没报告——而 run-track-a 同样的静默靠
+# 重试就恢复了。本任务幂等（只读遥测 + 重写同一份报告），重试无副作用；且以「报告
+# 文件是否落盘」为退出条件，成功即停，不会白烧 token。
+ATTEMPTS="${AUTOPILOT_DAILY_RETRIES:-3}"
+case "$ATTEMPTS" in ''|*[!0-9]*) ATTEMPTS=3 ;; esac
+[ "$ATTEMPTS" -ge 1 ] || ATTEMPTS=1
+REPORT_OK=0
+attempt=1
+while [ "$attempt" -le "$ATTEMPTS" ]; do
+  log "dispatching analysis agent (stage=analyze-daily model=$MODEL attempt=$attempt/$ATTEMPTS)"
+  if ! AUTOPILOT_STAGE="analyze-daily" AUTOPILOT_RUN_ID="$DATE" AUTOPILOT_ATTEMPT="$attempt" \
+      "$DISPATCH" --model "$MODEL" --cwd "$PLUGIN_ROOT" \
+      --prompt-file "$PROMPT_FILE" \
+      --instruction "分析当日遥测数据，写体检报告到 \$LOG_ROOT/reports/，可选写分类片段；只出建议不改代码。" \
+      > "$RESULT_FILE" 2>&1; then
+    log "WARN: analysis agent dispatch failed (attempt $attempt/$ATTEMPTS)"
+    tail -20 "$RESULT_FILE" 2>/dev/null | sed 's/^/  | /'
+  fi
+  # 产物硬校验：dispatch rc=0 只说明 CLI 正常退出，不说明 agent 真的写了报告。
+  # 假成功比失败更危险：使用者以为有体检报告，实际从 7 月起就无产出。
+  if [ -s "$REPORT_FILE" ]; then
+    REPORT_OK=1
+    log "report verified: $REPORT_FILE ($(wc -c < "$REPORT_FILE" | tr -d '[:space:]') bytes, attempt $attempt)"
+    break
+  fi
+  log "WARN: no report at $REPORT_FILE after attempt $attempt/$ATTEMPTS"
+  log "      worker verdict: $("$SCRIPT_DIR/parse-markers.sh" status "$RESULT_FILE" 2>/dev/null || echo UNKNOWN)"
+  tail -6 "$RESULT_FILE" 2>/dev/null | sed 's/^/  | /'
+  attempt=$(( attempt + 1 ))
+done
+if [ "$REPORT_OK" -eq 0 ]; then
+  log "WARN: analysis agent produced no report after $ATTEMPTS attempt(s) (metrics are still valid)"
 fi
 
 # ── 4. categories fragment merge protocol (spec.md §5.4) ────────────────────
@@ -288,5 +332,9 @@ else
   log "no categories fragment to merge (missing/empty/non-array) — skipped"
 fi
 
-log "done: report(s) under $LOG_ROOT/reports/, metrics under $LOG_ROOT/metrics/"
+if [ "$REPORT_OK" -eq 1 ]; then
+  log "done: report(s) under $LOG_ROOT/reports/, metrics under $LOG_ROOT/metrics/"
+  exit 0
+fi
+log "done with WARNINGS: metrics under $LOG_ROOT/metrics/, but no report was produced"
 exit 0

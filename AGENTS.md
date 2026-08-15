@@ -10,7 +10,7 @@ AI 全托管开发编排器。从需求到部署的全自动开发流水线。
 
 两档只差"外层阶段是否有人交互"，**开发都经 `run-track-a.sh` 托管给 qodercli**；共享同一套阶段与不变量（explore / CR / verify / evolve）。选档规则见 `skills/using-neil-autopilot/SKILL.md` 的「执行档位」，档位差异集中在 `skills/_shared/conventions.md` 的「档位适配表」（单一事实源）。
 
-`scripts/run-autopilot.sh` 是档位 A 的无人值守端到端入口：编排 loop（`run-track-a.sh`）→ finish → evolve 三阶段，fail-closed（任一阶段 BLOCKED 即停，不接力）；evolve 现会门禁化自动回写 AGENTS.md（见 `autopilot-evolve` Step 6）。
+`scripts/run-autopilot.sh` 是档位 A 的无人值守端到端入口：编排 loop（`run-track-a.sh`）→ finish（默认走确定性 `finish-change.sh`）→ evolve 三阶段，fail-closed（任一阶段 BLOCKED 即停，不接力）。可重跑：change 已归档时自动跳过 loop+finish、从 evolve 续跑（也可显式 `--skip-loop`）。
 
 **顶层串行流程**:
 
@@ -35,25 +35,32 @@ implement(worker-cli) → verify(编译) → review(reviewer-cli) → fix(worker
 | AUTOPILOT_ANALYZE_MODEL | Ultimate | 需求分析阶段模型（需强推理） |
 | AUTOPILOT_PLAN_MODEL | Ultimate | Task 拆解阶段模型（需强推理） |
 | AUTOPILOT_IMPLEMENTER_MODEL | Performance | 编码型 worker 模型 |
-| AUTOPILOT_REVIEWER_MODEL | Ultimate | 审查型 worker 模型（需高质量 CR，默认 Ultimate；空输出为 transport 抖动、由重试兜底，与模型无关） |
+| AUTOPILOT_REVIEWER_MODEL | Ultimate | 审查型 worker 模型（需高质量 CR，默认 Ultimate）。注：空输出**不是** transport 抖动，而是模型把回合收在 thinking 里（见 `AUTOPILOT_SILENT_*`） |
 | AUTOPILOT_FIXER_MODEL | Performance | 修复型 worker 模型 |
 | AUTOPILOT_INIT_MODEL | Performance | Harness 初始化阶段模型 |
 | AUTOPILOT_EVOLVE_MODEL | Ultimate | 知识沉淀阶段模型（需强归纳） |
 | AUTOPILOT_MAX_PARALLEL | 3 | 最大并行 Task 数 |
 | `AUTOPILOT_TIMEOUT_<STAGE>` | review=900 / implement=1800 / fix=900 / 其他=600 | 分阶段 worker 超时秒数；`<STAGE>` 为大写阶段名（如 `AUTOPILOT_TIMEOUT_REVIEW`） |
 | `AUTOPILOT_KILL_AFTER_S` | 30 | 超时发送 TERM 后等待多少秒再强制 KILL |
-| `AUTOPILOT_TRANSPORT_RETRIES` | 3 | TRANSPORT / EMPTY worker 的最大尝试次数 |
-| `AUTOPILOT_RETRY_BACKOFF_S` | 5 | 传输重试指数退避基数秒数（5/10/20） |
-| `AUTOPILOT_USAGE_JSON` | 1 | Qoder 且有 jq 时启用 `qodercli -o json` usage 信封；设 0 退回文本输出 |
+| `AUTOPILOT_TRANSPORT_RETRIES` | 3 | **TRANSPORT**（真链路故障）最大尝试次数；判为 SILENT（静默且已改动工作树）时不重试 |
+| `AUTOPILOT_SILENT_RETRIES` | 5 | **EMPTY / 静默回合**（工作树未动）最大尝试次数，**立即重试不退避**——等待无法让 thinking-only 回合开口；实测静默率约 50%，故上限单独设更高 |
+| `AUTOPILOT_SILENT_EFFORT` | low | 静默后的重试降低 `--reasoning-effort` 到此档位（直接打击“回合死在 thinking 里”；实测同 prompt 默认档 1/4 静默 vs low 档 0/4）。**首次尝试不降档**以保质量；设空字符串关闭 |
+| `AUTOPILOT_SILENT_FALLBACK_MODEL` | Performance | 连续静默达 `AUTOPILOT_SILENT_SWITCH_AFTER` 次后换成该模型跑完剩余尝试；设空字符串关闭 |
+| `AUTOPILOT_SILENT_SWITCH_AFTER` | 2 | 静默几次后开始换模型（保证默认模型先被充分尝试） |
+| `AUTOPILOT_FINISH_MODE` | deterministic | finish 阶段执行方式；设 `worker` 退回旧的 agent 路径（需要 SKILL.md 里的 PR/CI 语义时）。实测 agent 路径 finish 7/7 未给结论，故默认确定性 |
+| `AUTOPILOT_RETRY_BACKOFF_S` | 5 | 传输重试指数退避基数秒数（5/10/20）；**只作用于 TRANSPORT**，静默不退避 |
+| `AUTOPILOT_USAGE_JSON` | 0 | 设 1 才启用 `qodercli -o json` usage 信封。**默认关闭是功能性约束**：带 `-o json` 时 headless 工具循环会停在首个 tool_use、工具根本不执行（实测 0/5 成功）。仅纯只读统计场景才值得开 |
 | `AUTOPILOT_RAW_JSON` | （未设置） | 可选：把 qodercli 原始 JSON 信封复制到指定路径 |
 | `AUTOPILOT_REVIEW_DIFF_BUDGET` | 120000 | reviewer 上下文最大字节数，超限显式标记 `TRUNCATED` |
 | `AUTOPILOT_EMPTY_LOG_BYTES` | 300 | worker 短日志判为 EMPTY / TRANSPORT 的字节阈值 |
+| `AUTOPILOT_LOCK_DIR` | `$TMPDIR/autopilot-track-a-lock<change-dir>` | Track A per-change 并发锁路径；默认落 TMPDIR，绝不放业务仓库内（否则被每个 Task 的 `git add -A` 提交进去） |
 | NEIL_AUTOPILOT_LOG_DIR | `$HOME/Library/Logs/neil-autopilot` | 遥测日志根（落在业务 CWD 内自动降级到 $TMPDIR） |
 | NEIL_AUTOPILOT_TELEMETRY | 1 | 设 0 全局关闭遥测（fail-safe 开关） |
 | NEIL_AUTOPILOT_KEEP_DAYS | 30 | runs/ 原始日志保留天数（metrics/reports 长期保留） |
 | NEIL_AUTOPILOT_LOG_SINK | file | telemetry 写入后端；云端保险/未来 OSS/SLS 扩展点，未识别值兜底回退 file |
 | NEIL_AUTOPILOT_KB_DIR | `$HOME/.neil-autopilot/knowledge` | 全局跨项目知识库路径（`scripts/kb-path.sh` 解析单一事实源，C14/C8）；evolve 升迁通用经验 / kb-search 检索历史命中共用 (source: raw/20260719-archive-knowledge-loop.md) |
 | AUTOPILOT_DAILY_MODEL | Ultimate | 每日 analysis agent 模型 |
+| `AUTOPILOT_DAILY_RETRIES` | 3 | 每日 analysis agent 最大尝试次数；以「reports/<date>.md 是否落盘」为退出条件，成功即停 |
 
 超时取值以 `scripts/dispatch.sh` 为准，优先级为：CLI `--timeout` > `AUTOPILOT_TIMEOUT_<STAGE>` > `AUTOPILOT_TIMEOUT` > 内置阶段默认值；任一来源设为 `0` 表示不启用 timeout 包装。
 
@@ -74,11 +81,13 @@ $AGENT_DISPATCH --model "MODEL" --cwd "$PROJECT_ROOT" \
 |------|------|
 | `scripts/telemetry.sh` | 可 source 的遥测 lib：emit/rotate/log_root，写侧零依赖、fail-safe（绝不污染 stdout / 不改 exit code） |
 | `scripts/classify-outcome.sh` | 按退出码、锚定标记与日志大小分类 `OK/TRANSPORT/TIMEOUT/EMPTY/APP`，供有界重试决策使用 |
+| `scripts/parse-markers.sh` | 锚定式解析结论标记（`**Status:**` / `XXX_STATUS=` / `REVIEW_PASS|FAIL`，容列表符与反引号），是「worker 报没报数」的单一判据 |
+| `scripts/finish-change.sh` | **确定性 finish**（C10）：全 Task DONE + 工作树清洁两道门禁 → 探测基分支合并（冲突即 abort 并还原）→ 归档（XOR）→ 提交 → 清哨兵。merge 路径上不再有 LLM |
 | `scripts/review-context.sh` | 生成预算受限的 review diff，上下文超限时保留文件概览并标记 `TRUNCATED` |
 | `scripts/migrate-log-root.sh` | 将旧日志根的 runs/metrics/reports 只复制到新目录并校验 JSONL 行数，不删除源数据 |
 | `scripts/smoke-all.sh` | 顺序执行全部 token-free `smoke-*.sh`，失败即停的统一回归入口 |
-| `scripts/daily-analysis.sh` | 每日编排：rotate runs/ → jq 聚合 metrics/ → dispatch 1 个 analysis agent 写 reports/（硬依赖 jq） |
-| `scripts/install-daily-schedule.sh` | 生成/加载每日 13:00 定时任务（macOS launchd plist / Linux crontab），固化 LOG_DIR + PATH |
+| `scripts/daily-analysis.sh` | 每日编排：rotate runs/ → jq 聚合 metrics/ → dispatch analysis agent 写 reports/（硬依赖 jq；按报告文件是否落盘定成败，不以 dispatch 退出码为准） |
+| `scripts/install-daily-schedule.sh` | 生成/加载每日 13:00 定时任务；**插件改动后必须重跑本脚本**（`--stage-scripts` 把脚本副本放到 TCC 安全目录，副本不会自动跟随仓库更新）。用 `--check-staged` 只读检测副本是否落后（一致 exit 0 / 落后 exit 3 并点名文件） |
 
 系统只产出**建议**（reports/，针对插件自身角色 prompt），改不改永远人工批准，绝不自动改自己。
 
