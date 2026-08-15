@@ -10,26 +10,35 @@ echo "Source: ${PLUGIN_DIR}"
 echo "Target: ${QODER_SKILLS_DIR}"
 echo ""
 
+# 目标目录必须先存在：全新装机 / Qoder 未首次启动 / 用户清理过该目录时，`~/.qoder/skills`
+# 可能不存在，下面第一个 `ln` 就会因父目录缺失而失败，在 set -e 下直接中止：
+# skill 没装上、hard-gate 也没注册，只留一行 ln 报错。
+mkdir -p "$QODER_SKILLS_DIR"
+
+# 安全建链：目标已存在且**不是符链**（例如以前用拷贝方式装过、或用户手建过目录）时，
+# `ln -sf` 不会替换它，而是把链接建到目录**内部**（dest/<name>/<name>）并返回 0，
+# 于是脚本照样打 ✅ —— 旧版 skill 继续被加载、新代码永不生效，且全程无任何报错
+# （已实测复现）。`-n` 另外防止跟随已有符链进入目录。
+link_skill() {  # $1=src dir  $2=target path  $3=label
+    local src="$1" target="$2" label="$3"
+    if [ -L "$target" ]; then
+        rm "$target"
+    elif [ -e "$target" ]; then
+        echo "  ❌ ${target} 已存在且不是符号链接（旧版拷贝？）—— 请先移走再重跑安装" >&2
+        exit 1
+    fi
+    ln -sfn "$src" "$target"
+    echo "  ✅ ${label} → ${target}"
+}
+
 # Install each sub-skill as a symlink
 for skill_dir in "${PLUGIN_DIR}/skills"/*/; do
     skill_name=$(basename "$skill_dir")
-    target="${QODER_SKILLS_DIR}/${skill_name}"
-    
-    if [ -L "$target" ]; then
-        rm "$target"
-    fi
-    
-    ln -sf "$skill_dir" "$target"
-    echo "  ✅ ${skill_name} → ${target}"
+    link_skill "$skill_dir" "${QODER_SKILLS_DIR}/${skill_name}" "$skill_name"
 done
 
 # Also install the root as neil-coding-autopilot (bootstrap entry)
-root_target="${QODER_SKILLS_DIR}/neil-coding-autopilot"
-if [ -L "$root_target" ]; then
-    rm "$root_target"
-fi
-ln -sf "${PLUGIN_DIR}" "$root_target"
-echo "  ✅ neil-coding-autopilot (root) → ${root_target}"
+link_skill "${PLUGIN_DIR}" "${QODER_SKILLS_DIR}/neil-coding-autopilot" "neil-coding-autopilot (root)"
 
 echo ""
 echo "Done! Installed $(ls -d "${PLUGIN_DIR}/skills"/*/ | wc -l | tr -d ' ') skills + 1 root entry."

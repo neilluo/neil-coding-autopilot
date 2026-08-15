@@ -7,7 +7,7 @@
 
 **铁律：控制器永不内联写码；loop 的开发一律经 `run-track-a.sh` 托管给 fresh qodercli worker（两档通用）。**
 
-> **此铁律现由运行时硬门禁强制，非仅约定**：`hooks/guard-controller-write.sh`（PreToolUse `deny`，`bypass_permissions` 也拦得住）在 autopilot 运行期（`autopilot/.run-active` 哨兵存在时）拦截控制器对源码的 `Write/Edit`；worker（`dispatch.sh` 置 `AUTOPILOT_ROLE=worker`）与 `.md`/`autopilot/` 产物放行。由 `install.sh` 合并进 `~/.qoder/settings.json` 激活（本插件以 skills 安装、非 Qoder plugin，故 `hooks-qoder.json` 不会被自动加载）。见 `autopilot/changes/harden-controller-write-gate/spec.md`。
+> **此铁律现由运行时硬门禁强制，非仅约定**：`hooks/guard-controller-write.sh`（PreToolUse `deny`，`bypass_permissions` 也拦得住）在 autopilot 运行期（`autopilot/.run-active` 哨兵存在时）拦截控制器对源码的 `Write/Edit`；worker（`dispatch.sh` 置 `AUTOPILOT_ROLE=worker`）与 `.md`/`autopilot/` 产物放行。**注意两个 fail-open 边界**：① 哨兵超过 `AUTOPILOT_RUN_TTL_HOURS`（默认 12h）视为崩溃残留而放行，避免把正常编码锁死；② 无法分类时（如拿不到 file_path）也放行。由 `install.sh` 合并进 `~/.qoder/settings.json` 激活（本插件以 skills 安装、非 Qoder plugin，故 `hooks-qoder.json` 不会被自动加载）。见 `autopilot/changes/harden-controller-write-gate/spec.md`。
 
 - **档位 A · 无人值守**：explore/analyze/plan headless（或 spec-ready），从终端起 `run-track-a.sh` 端到端跑 loop，`progress.md` 落盘为状态源，`autopilot-checkpoint` 把关。
 - **档位 B · 交互**：控制器在会话内跑 explore/analyze/plan/finish/evolve（跟用户交互），**loop 同样调 `run-track-a.sh` 托管开发**；阶段级状态用 TodoWrite，Task 级状态由脚本写进 tasks.md。
@@ -141,7 +141,7 @@ EOF
 |---------|------|--------|
 | AUTOPILOT_IMPLEMENTER_MODEL | 编码型 worker | Performance |
 | AUTOPILOT_REVIEWER_MODEL | 审查型 worker | Ultimate |
-| AUTOPILOT_FIXER_MODEL | 修复型 worker | Performance |
+| AUTOPILOT_FIXER_MODEL | 修复型 worker | 跟随 IMPLEMENTER（未设时） |
 | AUTOPILOT_ANALYZE_MODEL | 需求分析 | Ultimate |
 | AUTOPILOT_PLAN_MODEL | Task 拆解 | Ultimate |
 | AUTOPILOT_INIT_MODEL | 初始化 | Performance |

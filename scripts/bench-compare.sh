@@ -98,11 +98,19 @@ failure_count="NO-DATA"; failure_seconds="NO-DATA"; replay_seconds="NO-DATA"
 if compgen -G "$log_root/runs/*.jsonl" >/dev/null; then
   failure_count="$(jq -s '[.[] | select(type=="object") | select(.event=="dispatch" and (.stage=="review" or .stage=="fix") and (.failure_class=="TRANSPORT" or .failure_class=="EMPTY" or .failure_class=="TIMEOUT"))] | length' "$log_root"/runs/*.jsonl)"
   failure_seconds="$(jq -s '[.[] | select(type=="object") | select(.event=="dispatch" and (.stage=="review" or .stage=="fix") and (.failure_class=="TRANSPORT" or .failure_class=="EMPTY" or .failure_class=="TIMEOUT"))] | map(.duration_s // 0) | add // 0' "$log_root"/runs/*.jsonl)"
+  # `E as $x | body` 里 body 的输入是 **E 的输入**，不是最外层 slurp 数组。旧写法在
+  # `[ ... ] | unique as $retried |` 之后，`.` 已经变成「change 名字符串数组」，于是 else
+  # 分支里的 `.[] | select(.event==...)` 是在字符串上取 .event。它恰好被前面的
+  # `select(type=="object")` 全部过滤掉，所以**不报错**，而是静默得到空数组 → `add // 0`
+  # → 永远输出 0（实测：造一条 blocked run + 一条 42s 的 implement dispatch，旧程序得 0、
+  # 修后得 42）—— 这个指标从来没真正工作过，而且因为不报错而没人发现。
+  # 修法：先把全量事件绑到 $all，else 分支基于 $all 遍历。
   replay_seconds="$(jq -s '
-    [ .[] | select(type=="object") | select(.event=="run" and .change and .run_id) ] as $runs |
-    [ $runs[] | select(.outcome=="blocked") | .change ] | unique as $retried |
+    . as $all |
+    [ $all[] | select(type=="object") | select(.event=="run" and .change and .run_id) ] as $runs |
+    ([ $runs[] | select(.outcome=="blocked") | .change ] | unique) as $retried |
     if ($retried|length)==0 then "NO-DATA" else
-      [ .[] | select(type=="object") | select(.event=="dispatch" and .stage=="implement" and ([.run_id] | inside([$runs[] | select(.change as $c | $retried | index($c)) | .run_id]))) | .duration_s // 0 ] | add // 0
+      [ $all[] | select(type=="object") | select(.event=="dispatch" and .stage=="implement" and ([.run_id] | inside([$runs[] | select(.change as $c | $retried | index($c)) | .run_id]))) | .duration_s // 0 ] | add // 0
     end' "$log_root"/runs/*.jsonl)"
 fi
 

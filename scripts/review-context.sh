@@ -25,11 +25,19 @@ EOF
 CWD=""
 BUDGET="${AUTOPILOT_REVIEW_DIFF_BUDGET:-120000}"
 OUT=""
+# 带值选项缺值必须当场报错退出。本脚本只有 `set -uo pipefail`（无 -e），而 bash 的
+# `shift 2` 在 $# < 2 时仅返回非零、**不移除任何参数**，于是 while 以同一个 $1 无限
+# 循环：实测 `review-context.sh --cwd /repo --budget` 会 CPU 空转、永不返回（rc=124 靠
+# 外部 timeout 才能杀掉）。本脚本在无人值守链路里由 run-track-a / bench 程序化调用，
+# 一旦上游拼错参数，得到的不是 fail-closed 而是整条流水线挂死。
+# 同仓的 finish-change.sh / archive-change.sh 本就是这么守的，这里对齐。
+need_value() { [ "$2" -ge 2 ] || { echo "ERROR: $1 requires a value" >&2; usage; exit 1; }; }
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --cwd) CWD="${2:-}"; shift 2 ;;
-    --budget) BUDGET="${2:-}"; shift 2 ;;
-    --out) OUT="${2:-}"; shift 2 ;;
+    --cwd) need_value "$1" $#; CWD="$2"; shift 2 ;;
+    --budget) need_value "$1" $#; BUDGET="$2"; shift 2 ;;
+    --out) need_value "$1" $#; OUT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage; exit 1 ;;
   esac
@@ -42,6 +50,16 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 RESULT="$TMP/result"
+
+# git 包装器：`core.quotePath=false` 必须加在**所有列路径与吃路径**的调用上。
+# git 默认 core.quotePath=true，含非 ASCII 字节的文件名会被输出成带双引号的八进制
+# 转义串（实测：`文档.md` → `"\346\226\207\346\241\243.md"`）。这个**带引号的字面串**被当
+# 成真路径回灌给 git，pathspec 匹配不到任何文件，而错误又被 `2>/dev/null` / `|| true`
+# 全部吞掉 —— 于是该文件既不在 stat 段、也不在 diff 正文，**还不会触发 TRUNCATED 标记**
+# （完整内容本就没超预算）。reviewer 拿到一份看上去完整、实际缺了文件的上下文，
+# 完全可能对未被审查的改动给出 REVIEW_PASS：在中文项目里这是很现实的假成功路径。
+# pathspec 同时加 `:(literal)`，避开文件名里的 `*` / `[` 被 git 当成通配符解释。
+GITQ() { git -c core.quotePath=false -C "$CWD" "$@"; }
 
 is_noise() {
   case "$1" in
@@ -92,19 +110,19 @@ UNTRACKED="$TMP/untracked"
 : > "$UNTRACKED"
 while IFS= read -r path; do
   [ -n "$path" ] && ! is_noise "$path" && printf '%s\n' "$path" >> "$TRACKED"
-done < <(git -C "$CWD" diff --name-only HEAD -- 2>/dev/null)
+done < <(GITQ diff --name-only HEAD -- 2>/dev/null)
 while IFS= read -r path; do
   [ -n "$path" ] && ! is_noise "$path" && printf '%s\n' "$path" >> "$UNTRACKED"
-done < <(git -C "$CWD" ls-files --others --exclude-standard 2>/dev/null)
+done < <(GITQ ls-files --others --exclude-standard 2>/dev/null)
 
 STAT="$TMP/stat"
 : > "$STAT"
 if [ -s "$TRACKED" ]; then
   PATHSPEC_ARGS=()
   while IFS= read -r path; do
-    PATHSPEC_ARGS+=("$path")
+    PATHSPEC_ARGS+=(":(literal)$path")
   done < "$TRACKED"
-  git -C "$CWD" diff --stat HEAD -- "${PATHSPEC_ARGS[@]}" 2>/dev/null >> "$STAT" || true
+  GITQ diff --stat HEAD -- "${PATHSPEC_ARGS[@]}" 2>/dev/null >> "$STAT" || true
 fi
 while IFS= read -r path; do
   [ -n "$path" ] && printf ' %s (untracked)\n' "$path"
@@ -122,10 +140,10 @@ OMITTED="$TMP/omitted"
 : > "$OMITTED"
 while IFS= read -r path; do
   [ -n "$path" ] || continue
-  if git -C "$CWD" diff --numstat HEAD -- "$path" 2>/dev/null | grep -q '^-'; then
+  if GITQ diff --numstat HEAD -- ":(literal)$path" 2>/dev/null | grep -q '^-'; then
     printf '%s（二进制，仅列名）\n' "$path" >> "$BODY"
   else
-    git -C "$CWD" diff --no-ext-diff --binary HEAD -- "$path" 2>/dev/null >> "$BODY" || true
+    GITQ diff --no-ext-diff --binary HEAD -- ":(literal)$path" 2>/dev/null >> "$BODY" || true
   fi
 done < "$TRACKED"
 while IFS= read -r path; do

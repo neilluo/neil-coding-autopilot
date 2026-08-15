@@ -71,12 +71,17 @@ grep -Fq 'image.bin' "$LARGE" && pass 'binary file is listed' || fail 'binary fi
 assert_absent "$LARGE" 'node_modules/x.js' 'node_modules is filtered'
 assert_absent "$LARGE" 'autopilot/changes/foo/tasks.md' 'tasks.md is filtered'
 
-# Symlink: content of /etc/hosts must not appear in output.
-if grep -q 'localhost' "$LARGE" 2>/dev/null && ! grep -Fq 'sneaky-link' "$LARGE"; then
-  fail 'symlink content unexpectedly absent from listing'
-else
-  pass 'symlink content is not expanded (no /etc/hosts data)'
-fi
+# Symlink: the link must be LISTED by name, but its target's content must NOT be expanded.
+# 旧写法把两件事揉成一个条件且写反了：
+#   if grep -q 'localhost' && ! grep -Fq 'sneaky-link'; then fail ... else pass ...
+# 真正的泄露场景是「既列出了 sneaky-link、又展开了 /etc/hosts 内容」—— 此时
+# `! grep -Fq 'sneaky-link'` 为假、整个条件为假 → 走 else → **pass**。也就是说，
+# review-context.sh 一旦改成 `cat` 未跟踪文件（而不是跳过 symlink）、把 /etc/hosts
+# 内容写进 reviewer prompt，这条断言照样 PASS。拆成两条独立断言：
+#   ① 链名必须出现（否则“没泄露”可能只是文件根本没被枚举，等于没测）；
+#   ② 目标内容（/etc/hosts 里的 localhost）绝不能出现。
+grep -Fq 'sneaky-link' "$LARGE" && pass 'symlink itself is listed (so the no-leak check is meaningful)' || fail 'symlink not listed at all — the no-leak assertion would be vacuous'
+grep -q 'localhost' "$LARGE" 2>/dev/null && fail 'symlink target content leaked into review context' || pass 'symlink content is not expanded (no /etc/hosts data)'
 
 bash "$SCRIPT_DIR/review-context.sh" --cwd "$REPO" --budget 800 --out "$MEDIUM" || fail 'medium-budget generation succeeds'
 bash "$SCRIPT_DIR/review-context.sh" --cwd "$REPO" --budget 200 --out "$SMALL" || fail 'small-budget generation succeeds'

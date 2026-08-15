@@ -126,7 +126,13 @@ WORK="$WORK" TMPDIR="$WORK" PATH="$STUB_BIN:$PATH" AUTOPILOT_PLATFORM=qoder \
 rc2=$?
 set -e
 [ "$rc2" -eq 2 ] && pass "exit 2 (loop BLOCKED)" || { fail "exit=$rc2 (expected 2)"; tail -15 "$WORK/s2.log" | sed 's/^/    | /'; }
-[ ! -f "$WORK/finish.hit" ] && pass "finish.hit NOT created (no relay after BLOCKED)" || fail "finish.hit unexpectedly exists"
+# 不能用 `[ ! -f "$WORK/finish.hit" ]` 当判据：finish 现在默认走确定性路径（C10），
+# 根本不会调 qodercli stub，而 finish.hit 只由 stub 创建 —— 那条断言已经**恒真**：
+# 即使 fail-closed 回归成“loop BLOCKED 后照样接力 finish”，它也照样 PASS，
+# 于是本套件最核心的保护在 finish 侧失去检测能力。Scenario 1 已经为同一原因换过判据，
+# 这里改成对**行为**的断言：阶段根本没进入，且归档没发生。
+grep -q 'stage 2/3: finish' "$WORK/s2.log" && fail "finish stage ran after a BLOCKED loop" || pass "finish stage never entered (no relay after BLOCKED)"
+[ -d "$P2/autopilot/changes/smoke" ] && pass "change NOT archived after a BLOCKED loop" || fail "change was archived despite a BLOCKED loop"
 [ ! -f "$WORK/evolve.hit" ] && pass "evolve.hit NOT created (no relay after BLOCKED)" || fail "evolve.hit unexpectedly exists"
 
 echo ""
@@ -241,6 +247,99 @@ TMPDIR="$WORK" PATH="$STUB_BIN:$PATH" AUTOPILOT_PLATFORM=qoder WORK="$WORK" \
 rc6c=$?
 set -e
 [ "$rc6c" -ne 0 ] && pass "a mistyped change name still fails (not silently 'done')" || { fail "mistyped change name was treated as complete"; tail -6 "$WORK/s6c.log" | sed 's/^/    | /'; }
+
+echo ""
+echo "===== Scenario 7: 已归档但搬迁未提交 —— 绝不能洗成 ALL STAGES DONE ====="
+# finish-change.sh 的 merge 与归档 mv 发生在提交**之前**：它在 `git add -A` / `git commit`
+# 那一步 fail-closed（磁盘满 / hook 拒绝 / index.lock 被长期占用）时，归档搬迁已落在
+# 主干工作树上但未提交。而本入口的“已归档 → 跳过 loop+finish”捷径会直接接力跑 evolve，
+# 然后打印 ALL STAGES DONE ✅ exit 0 —— 把一个未提交的主干状态洗成全绿。
+# 这里用 `git reset --soft HEAD~1` 精确复现那个状态（搬迁已发生、commit 没成）。
+P7="$(make_project true 1)"
+rm -f "$WORK/finish.hit" "$WORK/evolve.hit" "$WORK/finish.calls"
+set +e
+TMPDIR="$WORK" PATH="$STUB_BIN:$PATH" AUTOPILOT_PLATFORM=qoder WORK="$WORK" \
+  bash "$RUNNER" --change-dir "$P7/autopilot/changes/smoke" --cwd "$P7" --skip-evolve \
+  > "$WORK/s7a.log" 2>&1
+rc7a=$?
+set -e
+[ "$rc7a" -eq 0 ] && pass "first pass (loop+finish) succeeds" || { fail "first pass exit=$rc7a"; tail -8 "$WORK/s7a.log" | sed 's/^/    | /'; }
+( cd "$P7" && git reset --soft HEAD~1 ) >/dev/null 2>&1 || true   # set -e 下夹具失败不得崩掉整套（下一行的 vacuity 守卫负责把它报成 FAIL）
+[ -n "$(cd "$P7" && git status --porcelain -- autopilot/archive autopilot/changes)" ] \
+  && pass "fixture reproduces the state: archived, move uncommitted" \
+  || fail "fixture did not produce an uncommitted archive move (scenario would be vacuous)"
+rm -f "$WORK/evolve.hit"
+set +e
+TMPDIR="$WORK" PATH="$STUB_BIN:$PATH" AUTOPILOT_PLATFORM=qoder WORK="$WORK" \
+  bash "$RUNNER" --change-dir "$P7/autopilot/changes/smoke" --cwd "$P7" \
+  > "$WORK/s7b.log" 2>&1
+rc7b=$?
+set -e
+[ "$rc7b" -eq 2 ] && pass "exit 2 (fail-closed)" || { fail "exit=$rc7b (expected 2)"; tail -10 "$WORK/s7b.log" | sed 's/^/    | /'; }
+grep -q 'ALL STAGES DONE' "$WORK/s7b.log" && fail "an uncommitted archive move was washed into ALL STAGES DONE" || pass "never printed ALL STAGES DONE"
+[ ! -f "$WORK/evolve.hit" ] && pass "evolve did NOT run on a dirty archive" || fail "evolve ran on top of an uncommitted archive move"
+grep -q '归档搬迁尚未提交' "$WORK/s7b.log" && pass "reason names the uncommitted archive move" || fail "stop reason unclear"
+grep -q 'git commit -m' "$WORK/s7b.log" && pass "prints a runnable recovery command" || fail "no recovery command printed"
+# 恢复后必须能接力（门禁不得把人永久锁在外面）
+( cd "$P7" && git add -A -- autopilot && git commit -qm 'chore(autopilot): archive smoke' ) >/dev/null 2>&1 || true
+set +e
+TMPDIR="$WORK" PATH="$STUB_BIN:$PATH" AUTOPILOT_PLATFORM=qoder WORK="$WORK" \
+  bash "$RUNNER" --change-dir "$P7/autopilot/changes/smoke" --cwd "$P7" \
+  > "$WORK/s7c.log" 2>&1
+rc7c=$?
+set -e
+[ "$rc7c" -eq 0 ] && pass "after committing the move, the rerun resumes at evolve" || { fail "recovery rerun exit=$rc7c"; tail -10 "$WORK/s7c.log" | sed 's/^/    | /'; }
+[ -f "$WORK/evolve.hit" ] && pass "evolve ran once the state was clean" || fail "evolve still did not run after recovery"
+
+echo ""
+echo "===== Scenario 8: 显式 --skip-loop --skip-finish 不得绕过归档提交断言 ====="
+# 上一个场景只盖住了“自动探测到已归档”那条入口。而 OPTIONS 里自己推荐的
+# “evolve 挂了单独重跑”写法是 `--skip-loop --skip-finish`：它跳过整个自动探测分支，
+# 已实测能把同一个“已归档但搬迁未提交”的主干状态洗成 exit 0 + 终局成功标记。
+P8="$(make_project true 1)"
+rm -f "$WORK/finish.hit" "$WORK/evolve.hit" "$WORK/finish.calls"
+set +e
+TMPDIR="$WORK" PATH="$STUB_BIN:$PATH" AUTOPILOT_PLATFORM=qoder WORK="$WORK" \
+  bash "$RUNNER" --change-dir "$P8/autopilot/changes/smoke" --cwd "$P8" --skip-evolve \
+  > "$WORK/s8a.log" 2>&1
+rc8a=$?
+set -e
+[ "$rc8a" -eq 0 ] && pass "first pass (loop+finish) succeeds" || { fail "first pass exit=$rc8a"; tail -8 "$WORK/s8a.log" | sed 's/^/    | /'; }
+( cd "$P8" && git reset --soft HEAD~1 ) >/dev/null 2>&1 || true
+rm -f "$WORK/evolve.hit"
+set +e
+TMPDIR="$WORK" PATH="$STUB_BIN:$PATH" AUTOPILOT_PLATFORM=qoder WORK="$WORK" \
+  bash "$RUNNER" --change-dir "$P8/autopilot/changes/smoke" --cwd "$P8" --skip-loop --skip-finish \
+  > "$WORK/s8b.log" 2>&1
+rc8b=$?
+set -e
+[ "$rc8b" -eq 2 ] && pass "exit 2 (explicit flags cannot bypass the gate)" || { fail "exit=$rc8b (expected 2)"; tail -10 "$WORK/s8b.log" | sed 's/^/    | /'; }
+grep -q 'ALL STAGES DONE' "$WORK/s8b.log" && fail "explicit-flag path washed it into ALL STAGES DONE" || pass "never printed ALL STAGES DONE"
+[ ! -f "$WORK/evolve.hit" ] && pass "evolve did NOT run" || fail "evolve ran on top of an uncommitted archive move"
+# --skip-evolve 也不得绕过（它同样会走到末尾打终局成功标记）
+set +e
+TMPDIR="$WORK" PATH="$STUB_BIN:$PATH" AUTOPILOT_PLATFORM=qoder WORK="$WORK" \
+  bash "$RUNNER" --change-dir "$P8/autopilot/changes/smoke" --cwd "$P8" --skip-loop --skip-finish --skip-evolve \
+  > "$WORK/s8c.log" 2>&1
+rc8c=$?
+set -e
+[ "$rc8c" -eq 2 ] && pass "--skip-evolve does not bypass it either" || { fail "exit=$rc8c (expected 2)"; tail -8 "$WORK/s8c.log" | sed 's/^/    | /'; }
+
+# 反面断言（防止门禁过宽）：归档已干净提交、但同仓有**另一个进行中的 change**（未提交），
+# 重跑 evolve 必须正常通过。曾用 `autopilot/changes` 整目录做 pathspec，已实测会在这里
+# 误拦成 exit 2，并把报错归因到一个不存在的 finish 故障上。
+( cd "$P8" && git add -A -- autopilot && git commit -qm 'chore(autopilot): archive smoke' ) >/dev/null 2>&1 || true
+mkdir -p "$P8/autopilot/changes/other-wip"
+printf '# an unrelated in-flight change\n' > "$P8/autopilot/changes/other-wip/spec.md"
+rm -f "$WORK/evolve.hit"
+set +e
+TMPDIR="$WORK" PATH="$STUB_BIN:$PATH" AUTOPILOT_PLATFORM=qoder WORK="$WORK" \
+  bash "$RUNNER" --change-dir "$P8/autopilot/changes/smoke" --cwd "$P8" \
+  > "$WORK/s8d.log" 2>&1
+rc8d=$?
+set -e
+[ "$rc8d" -eq 0 ] && pass "an unrelated in-flight change does NOT trip the gate" || { fail "exit=$rc8d (expected 0) — gate is over-broad"; tail -10 "$WORK/s8d.log" | sed 's/^/    | /'; }
+[ -f "$WORK/evolve.hit" ] && pass "evolve still runs with a parallel WIP change present" || fail "evolve was blocked by an unrelated change"
 
 echo ""
 if [ "$FAILED" -eq 0 ]; then echo "SMOKE(run-autopilot): ALL PASS"; exit 0; fi

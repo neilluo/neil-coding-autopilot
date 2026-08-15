@@ -17,7 +17,24 @@ cleanup() {
   [ -z "$OUTPUT_FILE" ] || rm -f "$OUTPUT_FILE"
   [ -z "$RESULT_FILE" ] || rm -f "$RESULT_FILE"
 }
-trap cleanup EXIT SIGTERM SIGINT
+# 信号路径必须**当场结束**，不能回落主流程。旧写法把三个事件挂在同一个 handler 上
+# （`trap cleanup EXIT SIGTERM SIGINT`），而 handler 执行完不退出，于是脚本从 `wait` 之后
+# 继续往下跑 —— 而 cleanup 已经删掉了 OUTPUT_FILE，接着的 `wc -c < "$OUTPUT_FILE"`
+# 直接报 "No such file or directory"、rc=1。已实测后果（向 dispatch 发 TERM）：
+#   ① worker 已经产出的 stdout 被彻底丢弃（下方的 cat 根本没跑到）；
+#   ② 退出码被写成 1，上层拿到「非 0 + 极短日志」按 TRANSPORT **重试**，
+#     而人为中止根本不该重试；
+#   ③ 末尾的 telemetry_emit_dispatch 永不触发，这次调用在遥测里凭空消失。
+# 现在信号路径先把已有输出吐出去（保住可观测性），再清理并用约定退出码结束。
+_on_signal() {
+  local code="${1:-143}"
+  if [ -n "$OUTPUT_FILE" ] && [ -s "$OUTPUT_FILE" ]; then command cat "$OUTPUT_FILE" || true; fi
+  cleanup
+  exit "$code"
+}
+trap cleanup EXIT
+trap '_on_signal 130' INT
+trap '_on_signal 143' TERM
 
 PLATFORM="${AUTOPILOT_PLATFORM:-auto}"
 MODEL=""
@@ -47,13 +64,22 @@ detect_platform() {
   fi
 }
 
+# 带值选项缺值必须显式报错，不能让 `$2` 在 set -u 下裸奔。这里不仅是报错好看不好看的
+# 问题，而是一条真实的 fail-closed 破洞（已实测）：本脚本在第 20 行就装上了 EXIT trap，
+# 而 bash 在因 set -u 展开错误而中止时，EXIT trap 里最后一条命令（cleanup 里那个总是成功的
+# `[ -z ... ] || rm -f ...`）的退出码会**盖掉**真实失败码，于是一次“参数写错”的硬错误
+# 以 **rc=0**（成功）交给调用方；run-track-a 拿到 rc=0 + 空日志就归为 EMPTY，接着按
+# “模型静默”重试到耗尽，最后给出一句彻底误导的诊断（“nothing was written, rerunning is
+# safe”）—— 而真因是调用方少传了一个参数。显式 `exit 1` 不会被 trap 洗白（已验证）。
+need_value() { [ "$2" -ge 2 ] || { echo "ERROR: $1 requires a value" >&2; usage >&2; exit 1; }; }
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --model) MODEL="$2"; shift 2 ;;
-    --cwd) CWD="$2"; shift 2 ;;
-    --prompt-file) PROMPT_FILE="$2"; shift 2 ;;
-    --instruction) INSTRUCTION="$2"; shift 2 ;;
-    --timeout) CLI_TIMEOUT="$2"; shift 2 ;;
+    --model) need_value "$1" $#; MODEL="$2"; shift 2 ;;
+    --cwd) need_value "$1" $#; CWD="$2"; shift 2 ;;
+    --prompt-file) need_value "$1" $#; PROMPT_FILE="$2"; shift 2 ;;
+    --instruction) need_value "$1" $#; INSTRUCTION="$2"; shift 2 ;;
+    --timeout) need_value "$1" $#; CLI_TIMEOUT="$2"; shift 2 ;;
     --help) usage; exit 0 ;;
     *) echo "Unknown arg: $1" >&2; shift ;;
   esac

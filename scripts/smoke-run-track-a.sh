@@ -18,9 +18,21 @@
 #
 # Usage: bash scripts/smoke-run-track-a.sh    # 0 = all pass, 1 = failure.
 set -uo pipefail
-unset AUTOPILOT_RUN_ID
+# 清场：把开发机 shell 里所有 AUTOPILOT_* 旋钮清掉，再只设本测试需要的。
+# 之前只 unset 了 RUN_ID / ROLE，其余约 20 个旋钮会直接泄漏进被测 runner，造成假失败
+# 或语义扭曲（已实测：本机 shell 里就存在已导出的 AUTOPILOT_TIMEOUT）。具体危害例子：
+#   • AUTOPILOT_TIMEOUT_IMPLEMENT 泄漏 → 场景 5 只设了 AUTOPILOT_TIMEOUT，而分阶段变量优先级更高，
+#     stub 会睡满 30s、墙钟断言假失败；
+#   • AUTOPILOT_EMPTY_LOG_BYTES 泄漏到 >400 → stub 的填充输出全被当成 EMPTY；
+#   • AUTOPILOT_SILENT_EFFORT= 泄漏 → 降档断言假失败。
+# 本文件开头那段关于 NEIL_AUTOPILOT_LOG_DIR 的注释已证明“开发机常驻 export”是真实事故模式。
+# 保留 AUTOPILOT_SMOKE_SANDBOX（smoke-all 的沙箱标记，属测试 harness 而非生产旋钮）。
+_smoke_sandbox_keep="${AUTOPILOT_SMOKE_SANDBOX:-}"
+for _v in ${!AUTOPILOT_@}; do unset "$_v"; done
+unset _v
+[ -z "$_smoke_sandbox_keep" ] || export AUTOPILOT_SMOKE_SANDBOX="$_smoke_sandbox_keep"
+unset STUB_MODE
 export AUTOPILOT_ALLOW_NESTED=1
-unset AUTOPILOT_ROLE
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 RUNNER="$SCRIPT_DIR/run-track-a.sh"
@@ -247,7 +259,11 @@ r2=$(grep -c 'round 2' "$WORK/s4.log" || true)
 b4=$(grep -c '^\*\*Status\*\*: BLOCKED$' "$P4/autopilot/changes/smoke/tasks.md" || true)
 [ "$b4" -ge 1 ] && pass "task BLOCKED" || fail "BLOCKED count=$b4 (expected ≥1)"
 
-# ④ no fixer dispatched — no "fix" dispatch line in driver log
+# ④ no fixer dispatched — 行为证据优先：此场景下 stub 全部返回 transport 故障、从不写
+#    stub-proof.txt，所以“没有任何 worker 真正跑过”可以直接用文件不存在来钉。
+#    日志 grep 只作为辅助：它既依赖 driver 的自由格式措辞（措辞一改就恒为 0、
+#    “transport 误派 fixer”的回归静默通过），模式也过宽（`fix.*dispatch` 能命中 prefix/suffix）。
+[ ! -f "$P4/stub-proof.txt" ] && pass "no worker actually ran (behavioural: stub-proof absent)" || fail "a worker ran despite transport exhaustion"
 fix4=$(grep -c '→ dispatch.*fix\|fix.*→ dispatch\|dispatch(.*fix\|fix.*dispatch' "$WORK/s4.log" || true)
 [ "$fix4" -eq 0 ] && pass "no fixer dispatched" || { fail "fixer was dispatched ($fix4 times)"; grep -i 'fix' "$WORK/s4.log" | sed 's/^/    | /'; }
 
@@ -309,6 +325,20 @@ fix6=$(grep -c 'fix.*dispatch\|dispatch.*fix' "$WORK/s6.log" || true)
 # ③ round advances to 2
 r2_6=$(grep -c 'round 2' "$WORK/s6.log" || true)
 [ "$r2_6" -ge 1 ] && pass "round advances to 2" || { fail "round 2 never appears"; grep 'round' "$WORK/s6.log" | sed 's/^/    | /'; }
+
+# ④ 最高危不变量：CR 判 FAIL 就**绝不能** commit、绝不能标 DONE。
+# 之前本场景只断言了“没重试 / 派了 fixer / 进了 round 2”，`rc6` 捕获后再无引用，
+# 于是“CR 判 FAIL 却照样提交并把 Task 标成 DONE”这条回归完全无网：只要驱动仍然
+# 打印 fix dispatch 与 round 2，它照样全绿。而全套用例里 no-commit 只覆盖了 verify 失败
+# （Scenario 2）与 commit hook 失败（Scenario 3），**CR 失败路径一条都没有**。
+T6="$P6/autopilot/changes/smoke/tasks.md"
+[ "$rc6" -eq 2 ] && pass "CR-fail exhausts rounds and exits 2 (fail-closed)" || { fail "exit=$rc6 (expected 2)"; tail -10 "$WORK/s6.log" | sed 's/^/    | /'; }
+d6=$(grep -c '^\*\*Status\*\*: DONE$' "$T6" || true)
+[ "$d6" -eq 0 ] && pass "CR-fail never marks the Task DONE" || fail "Task marked DONE despite REVIEW_FAIL ($d6)"
+b6=$(grep -c '^\*\*Status\*\*: BLOCKED$' "$T6" || true)
+[ "$b6" -eq 1 ] && pass "CR-fail marks the Task BLOCKED" || fail "expected 1 BLOCKED status line, got $b6"
+c6=$( ( cd "$P6" && git log --oneline 2>/dev/null | grep -c 'autopilot(track-a)' ) || true )
+[ "$c6" -eq 0 ] && pass "CR-fail commits nothing" || fail "unreviewed work committed ($c6 autopilot commits)"
 
 echo ""
 echo "===== Scenario 7: MARKER-ANCHOR integration ====="

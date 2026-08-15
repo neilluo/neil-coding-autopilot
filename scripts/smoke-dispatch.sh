@@ -9,6 +9,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DISPATCH="$SCRIPT_DIR/dispatch.sh"
 ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
+# 遥测隔离：本文件共 19 处 dispatch 调用，之前只有 3 处在命令行上内联了 NEIL_AUTOPILOT_LOG_DIR，
+# 其余 16 处直接往**真实日志根** `$HOME/Library/Logs/neil-autopilot/runs/` 写 TestModel 事件。
+# 已实测取证：真实 runs/<今天>.jsonl 里出现 40 条 model=TestModel 的 dispatch 事件，
+# stage 包括 `unknown` / `review` / `review;false`（后者是本文件 stage 清洗用例的专属输入，
+# 全仓只有这一处，因此可直接定位到本文件）。
+# 但**不能无条件覆盖**：smoke-all.sh 是遥测沙箱的单一收口点，它靠“沙箱里确实有事件”
+# 做泄露 canary（smoke-all.sh:86）；如果这里无条件改指自己的目录，canary 就报
+# “no events landed in the smoke sandbox”（已实测到这个回归）。
+# 所以：上游已沙箱化（AUTOPILOT_SMOKE_SANDBOX=1）则继承；否则（单跑本文件，
+# 此时 NEIL_AUTOPILOT_LOG_DIR 可能是用户 .zshrc 里指向生产日志根的值）强制自己隔离。
+# 单个用例如需断言遥测内容，仍可在命令行上内联该变量覆盖。
+if [ "${AUTOPILOT_SMOKE_SANDBOX:-0}" != 1 ]; then
+  export NEIL_AUTOPILOT_LOG_DIR="$ROOT/telemetry"
+fi
 BIN="$ROOT/bin"
 mkdir -p "$BIN"
 printf 'smoke prompt body\n' > "$ROOT/prompt.md"

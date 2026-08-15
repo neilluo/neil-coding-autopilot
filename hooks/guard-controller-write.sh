@@ -11,12 +11,20 @@
 # A PreToolUse deny holds even under --permission-mode bypass_permissions.
 #
 # Decision order — FAIL-OPEN on any uncertainty (never lock up normal coding):
-#   0. trap            any internal error              => allow (exit 0)
 #   1. scope gate      no autopilot/.run-active         => allow (not in a run)
 #   1b. stale sentinel sentinel older than TTL           => allow (crash residue)
 #   2. worker allow    AUTOPILOT_ROLE=worker (sole signal)=> allow
 #   3. whitelist       md / autopilot / harness (NOT tmp)=> allow
 #   4. otherwise       controller writing source at run  => DENY (exit 2)
+#
+# NOTE on the ERR trap below: with `set +e` (errexit off) bash never runs an ERR
+# trap, so it is NOT what delivers fail-open today — the real fail-open comes
+# from the fall-through paths above (e.g. an empty FILE_PATH exits 0). It is kept
+# only as a belt-and-braces net in case errexit is ever switched on. Do not cite
+# it as an active protection layer, and do not add `set -e` here without
+# re-reasoning: with errexit on, the first failing command (e.g. a grep that
+# simply finds nothing) would exit 0 and make the DENY branch unreachable,
+# silently degrading this hard gate into a no-op.
 #
 # Contract (qodercli 1.0.16, verified live): stdin carries top-level
 # tool_name, cwd, permission_mode and tool_input.file_path (fallback

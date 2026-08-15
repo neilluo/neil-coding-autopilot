@@ -36,10 +36,10 @@ implement(worker-cli) → verify(编译) → review(reviewer-cli) → fix(worker
 | AUTOPILOT_PLAN_MODEL | Ultimate | Task 拆解阶段模型（需强推理） |
 | AUTOPILOT_IMPLEMENTER_MODEL | Performance | 编码型 worker 模型 |
 | AUTOPILOT_REVIEWER_MODEL | Ultimate | 审查型 worker 模型（需高质量 CR，默认 Ultimate）。注：空输出**不是** transport 抖动，而是模型把回合收在 thinking 里（见 `AUTOPILOT_SILENT_*`） |
-| AUTOPILOT_FIXER_MODEL | Performance | 修复型 worker 模型 |
+| AUTOPILOT_FIXER_MODEL | 跟随 AUTOPILOT_IMPLEMENTER_MODEL（即 Performance） | 修复型 worker 模型；未设时跟随 implementer（包括 `--impl-model` 的覆盖值） |
 | AUTOPILOT_INIT_MODEL | Performance | Harness 初始化阶段模型 |
 | AUTOPILOT_EVOLVE_MODEL | Ultimate | 知识沉淀阶段模型（需强归纳） |
-| AUTOPILOT_MAX_PARALLEL | 3 | 最大并行 Task 数 |
+| AUTOPILOT_MAX_PARALLEL | （未实现，保留名） | loop **按设计串行**：run-track-a.sh 逐 Task 跑，且 per-change 锁就是排他的。代码零引用，设了不生效（曾标默认 3，属文档承诺了不存在的旋钮） |
 | `AUTOPILOT_TIMEOUT_<STAGE>` | review=900 / implement=1800 / fix=900 / 其他=600 | 分阶段 worker 超时秒数；`<STAGE>` 为大写阶段名（如 `AUTOPILOT_TIMEOUT_REVIEW`） |
 | `AUTOPILOT_KILL_AFTER_S` | 30 | 超时发送 TERM 后等待多少秒再强制 KILL |
 | `AUTOPILOT_TRANSPORT_RETRIES` | 3 | **TRANSPORT**（真链路故障）最大尝试次数；判为 SILENT（静默且已改动工作树）时不重试 |

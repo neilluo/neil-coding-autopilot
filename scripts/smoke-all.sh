@@ -48,6 +48,11 @@ SMOKE_OUTPUT="$(mktemp)"
 # 全部继承，新增 smoke 也自动安全。
 SMOKE_TM_ROOT="$(mktemp -d)"
 export NEIL_AUTOPILOT_LOG_DIR="$SMOKE_TM_ROOT/telemetry"
+# 显式标记“已由 smoke-all 沙箱化”。它存在的意义：单个 smoke 脚本可以分得清
+# “我的 NEIL_AUTOPILOT_LOG_DIR 是上游沙箱”与“它是用户 .zshrc 里指向生产日志根的值”：
+# 前者必须**继承**（否则下方的隔离自检 canary 就看不到事件、形同虚设），
+# 后者必须**覆盖**（否则单跑某个 smoke 就把假事件写进生产日志）。
+export AUTOPILOT_SMOKE_SANDBOX=1
 trap 'rm -f "$SMOKE_LIST" "$SMOKE_OUTPUT"; rm -rf "$SMOKE_TM_ROOT"' EXIT
 
 for smoke in "$SCRIPT_DIR"/smoke-*.sh; do

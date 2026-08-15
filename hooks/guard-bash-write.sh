@@ -12,12 +12,17 @@
 #                    node `writeFileSync('x.js', …)`
 #
 # Decision order — FAIL-OPEN on any uncertainty (never block legit shell):
-#   0. trap             any internal error                    => allow (exit 0)
 #   1. scope gate       no autopilot/.run-active               => allow (not a run)
 #   1b. stale sentinel  sentinel older than TTL                 => allow (crash residue)
 #   2. worker allow     AUTOPILOT_ROLE=worker                   => allow
 #   3. gather targets   no source-write vector detected         => allow
 #   4. otherwise        controller shell-writing source at run  => DENY (exit 2)
+#
+# NOTE on the ERR trap below: with `set +e` bash never runs an ERR trap, so it is
+# NOT an active protection layer — fail-open today comes from the fall-through
+# paths (empty CMD / no targets => exit 0). Kept only in case errexit is ever
+# enabled; do not add `set -e` here without re-reasoning (with errexit on, the
+# first failing grep would exit 0 and make DENY unreachable).
 #
 # Only a target with a known SOURCE-code extension that is NOT whitelisted
 # (*.md / autopilot/ / .qoder/ / /dev/*) triggers a deny. read-only opens,
@@ -91,7 +96,11 @@ $(printf '%s' "$CMD" | grep -oE "open\([[:space:]]*[\"'][^\"']+\.($_EXT)[\"'][[:
 $(printf '%s' "$CMD" | grep -oE "(writeFileSync|writeFile|appendFileSync)\([[:space:]]*[\"'][^\"']+\.($_EXT)[\"']" 2>/dev/null | grep -oE "[\"'][^\"']+[\"']" | tr -d "\"'")"
 fi
 
-_targets="$(printf '%s\n' "$_targets" | grep -v '^[[:space:]]*$' 2>/dev/null || true)"
+# 只删纯 fd 复制形态（`&1`、`&2`）。切勿写成 `grep -v '^&'`：对 `2>&1` 它本就是空操作
+# （分支 (a) 的目标字符类 `[^ "'|;&<>()]+` 本身排除 `&`，`&1` 根本进不了 _targets），
+# 却会把分支 (c) 的真目标一并丢掉 —— interpreter 路径用 `[^"']+` 抓取、允许含 `&`，
+# 于是 `python3 -c "open('&x.py','w')..."` 里的 `&x.py` 会被过滤，硬门禁反而多一条绕过。
+_targets="$(printf '%s\n' "$_targets" | grep -v '^[[:space:]]*$' 2>/dev/null | grep -vE '^&[0-9]+$' 2>/dev/null || true)"
 [ -z "$_targets" ] && exit 0
 
 # --- layer 4: deny if any candidate is a SOURCE file not on the whitelist ---

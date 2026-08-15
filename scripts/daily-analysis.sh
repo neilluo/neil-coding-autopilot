@@ -16,7 +16,7 @@
 #
 # OPTIONS:
 #   --date YYYY-MM-DD  Day to analyze (default: today).
-#   --keep-days N      runs/ retention days (default: $NEIL_AUTOPILOT_KEEP_DAYS or 3).
+#   --keep-days N      runs/ retention days (default: $NEIL_AUTOPILOT_KEEP_DAYS or 30).
 #   --trend-days N     How many days of historical metrics to reference (default: 30).
 #   --dry-run          Print the plan; rotate/aggregate/dispatch nothing.
 #   -h | --help        show usage.
@@ -60,11 +60,14 @@ TREND_DAYS=30
 DRY_RUN=false
 MODEL="${AUTOPILOT_DAILY_MODEL:-Ultimate}"
 
+# 带值选项缺值时给可行动的报错（否则 set -u 只报 "$2: unbound variable"）。
+need_value() { [ "$2" -ge 2 ] || { echo "ERROR: $1 requires a value (use --help)" >&2; exit 1; }; }
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    --date) DATE="$2"; shift 2;;
-    --keep-days) KEEP_DAYS="$2"; shift 2;;
-    --trend-days) TREND_DAYS="$2"; shift 2;;
+    --date) need_value "$1" $#; DATE="$2"; shift 2;;
+    --keep-days) need_value "$1" $#; KEEP_DAYS="$2"; shift 2;;
+    --trend-days) need_value "$1" $#; TREND_DAYS="$2"; shift 2;;
     --dry-run) DRY_RUN=true; shift;;
     -h|--help) usage; exit 0;;
     *) echo "Unknown arg: $1 (use --help)" >&2; exit 1;;
@@ -77,7 +80,12 @@ case "$DATE" in
   *) echo "ERROR: --date must be YYYY-MM-DD" >&2; exit 1;;
 esac
 
-[ -n "$KEEP_DAYS" ] || KEEP_DAYS="${NEIL_AUTOPILOT_KEEP_DAYS:-3}"
+# 默认值必须是 30，与契约的其余四处保持一致：telemetry.sh 的 telemetry_rotate 默认 30、
+# install-daily-schedule.sh 注入 30、AGENTS.md 与 README.md 的表格都写 30。曾误写为 3：
+# 手动直跑本脚本（header USAGE 里就这么教）且未设环境变量时，telemetry_rotate 3 会执行
+# `find runs -mtime +2 -delete`，把 3 天前的原始遥测静默删掉 —— 比文档承诺的保留期
+# 提前 27 天，而这些日志正是自进化建议的唯一证据源（cron 停摆几天回来就不可恢复）。
+[ -n "$KEEP_DAYS" ] || KEEP_DAYS="${NEIL_AUTOPILOT_KEEP_DAYS:-30}"
 case "$KEEP_DAYS" in ''|*[!0-9]*) echo "ERROR: --keep-days must be a positive integer" >&2; exit 1;; esac
 case "$TREND_DAYS" in ''|*[!0-9]*) echo "ERROR: --trend-days must be a positive integer" >&2; exit 1;; esac
 
@@ -119,7 +127,8 @@ fi
 HAS_NEW_RUNS=false
 [ -s "$VALID_JSONL" ] && HAS_NEW_RUNS=true
 
-EVENTS_JSON="$(jq -s '.' "$VALID_JSONL" 2>/dev/null || echo '[]')"
+# （不再预先把全天事件 slurp 成一个 shell 变量：下方的 jq 已改用 --slurpfile 直接读
+#   $VALID_JSONL，多存一份完整 JSON 只消耗内存并制造 ARG_MAX 隐患。）
 
 # jq aggregation program. producer->consumer mapping per spec.md §3.3.
 # commit_fail_count: task events carry committed=false for BOTH "rounds
@@ -210,7 +219,13 @@ def dispatch_summary(items):
   }
 JQEOF
 
-NEW_METRICS_JSON="$(LC_ALL=C jq -n --argjson events "$EVENTS_JSON" --arg date "$DATE" "$JQ_AGG")"
+# 事件集走**文件**而不走 argv：`--argjson events "$EVENTS_JSON"` 把一整天的事件序列化后
+# 当命令行参数传，macOS 的 ARG_MAX 只有 1MB（还要与环境变量共享）。本文件上方注释自己
+# 就记载过单日 11702 条事件，每条数百字节就已越限（smoke 过滤发生在 jq 程序内部，
+# argv 阶段是全量）；一到活跃日就会 execve 报 "Argument list too long"，set -e 退出，
+# 当日 metrics 与报告全部缺失。--slurpfile 绑定的 $events 同样是数组，程序体无需改；
+# 空文件得 []，与原来的 `|| echo '[]'` 兜底等价。
+NEW_METRICS_JSON="$(LC_ALL=C jq -n --slurpfile events "$VALID_JSONL" --arg date "$DATE" "$JQ_AGG")"
 
 # Re-running the same date must not silently reset a previously-merged
 # top_problem_categories back to [] — only the guarded merge step below
@@ -288,6 +303,15 @@ case "$ATTEMPTS" in ''|*[!0-9]*) ATTEMPTS=3 ;; esac
 [ "$ATTEMPTS" -ge 1 ] || ATTEMPTS=1
 REPORT_OK=0
 attempt=1
+# 基线指纹：下面的产物校验必须是「**本次运行**产生了新报告」，而不是「报告文件存在」。
+# $REPORT_FILE 在本脚本里从不被删除或清空，所以只要该日期已有报告（launchd 因唤醒
+# 重复触发同一天、人工用 --date 回补/重跑），即使本次 dispatch 完全静默、一字未写，
+# 第一轮就会命中 `-s` 而宣告成功 —— 有界重试（本阶段的核心机制）在重跑路径上被
+# 完全绕过，使用者看到的是一份**旧内容**报告被宣告成功。
+REPORT_SIG_BEFORE="none"
+if [ -f "$REPORT_FILE" ]; then
+  REPORT_SIG_BEFORE="$(cksum < "$REPORT_FILE" 2>/dev/null || echo none)"
+fi
 while [ "$attempt" -le "$ATTEMPTS" ]; do
   log "dispatching analysis agent (stage=analyze-daily model=$MODEL attempt=$attempt/$ATTEMPTS)"
   if ! AUTOPILOT_STAGE="analyze-daily" AUTOPILOT_RUN_ID="$DATE" AUTOPILOT_ATTEMPT="$attempt" \
@@ -300,7 +324,16 @@ while [ "$attempt" -le "$ATTEMPTS" ]; do
   fi
   # 产物硬校验：dispatch rc=0 只说明 CLI 正常退出，不说明 agent 真的写了报告。
   # 假成功比失败更危险：使用者以为有体检报告，实际从 7 月起就无产出。
-  if [ -s "$REPORT_FILE" ]; then
+  # 判据是「指纹变了」或「有明确的 DONE 裁决」二者之一：
+  #   ① 只看文件存在会让同一日期重跑时旧报告冒充本次产物（静默回合也算成功）；
+  #   ② 但只看指纹也不对：agent 幂等地确认“旧报告已完备”而未改写（或写出字节相同
+  #     的内容）是**合法结果**，那样会白烧完所有重试并报一句误导的 “no report”。
+  # 静默回合没有锚定裁决行，所以② 不会放过它 —— 防假成功的语义不变。
+  REPORT_SIG_NOW="none"
+  [ -f "$REPORT_FILE" ] && REPORT_SIG_NOW="$(cksum < "$REPORT_FILE" 2>/dev/null || echo none)"
+  REPORT_VERDICT="$("$SCRIPT_DIR/parse-markers.sh" status "$RESULT_FILE" 2>/dev/null || echo UNKNOWN)"
+  if [ -s "$REPORT_FILE" ] && { [ "$REPORT_SIG_NOW" != "$REPORT_SIG_BEFORE" ] \
+      || [ "$REPORT_VERDICT" = DONE ] || [ "$REPORT_VERDICT" = DONE_WITH_CONCERNS ]; }; then
     REPORT_OK=1
     log "report verified: $REPORT_FILE ($(wc -c < "$REPORT_FILE" | tr -d '[:space:]') bytes, attempt $attempt)"
     break
