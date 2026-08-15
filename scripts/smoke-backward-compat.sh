@@ -88,7 +88,20 @@ set -e
 
 for pair in 'AUTOPILOT_IMPLEMENTER_MODEL impl-env-model' 'AUTOPILOT_REVIEWER_MODEL review-env-model'; do
   var="${pair%% *}"; value="${pair#* }"
-  grep -q "${var}:-" "$SCRIPT_DIR/run-track-a.sh" && grep -q "$value" <(env "$var=$value" bash "$SCRIPT_DIR/run-track-a.sh" --help 2>&1) >/dev/null 2>&1 || true
+  # 这里原本有一行以 `|| true` 收尾、既不调 pass 也不调 fail 的死代码（与
+  # smoke-finish-change.sh 里那条恒真断言同一模式）：它想钉“环境变量真的生效”，
+  # 却去 `--help` 输出里找模型值（help 根本不回显模型），内层 grep 恒为 1、结果又被
+  # 丢弃，所以永不产生信号。现在改成真断言：--dry-run 的首行日志会打印
+  # `impl=<model> review=<model>`，拿它做行为级校验。
+  # 必须与 49-52 行的孪生调用一样把遥测隔离到 $WORK（并钉住平台）：否则每跑一次 smoke
+  # 就可能往真实日志根写入带假模型名（impl-env-model / review-env-model）的事件，
+  # 污染 daily-analysis 聚合与自进化数据 —— 正是本仓刚修过的那类缺陷。
+  dry_out="$(env "$var=$value" AUTOPILOT_PLATFORM=qoder NEIL_AUTOPILOT_LOG_DIR="$WORK/log-envcheck" \
+    bash "$SCRIPT_DIR/run-track-a.sh" \
+    --change-dir "$CHANGE" --cwd "$PROJECT" --dry-run 2>&1 || true)"
+  printf '%s' "$dry_out" | grep -q "$value" \
+    && pass "$var takes effect (dry-run reports it)" \
+    || fail "$var ignored (dry-run did not report $value)"
   grep -q "${var}:-" "$SCRIPT_DIR/run-track-a.sh" && pass "$var remains read by track runner" || fail "$var no longer read by track runner"
 done
 
@@ -119,15 +132,22 @@ fi
 AGENTS="$ROOT/AGENTS.md"
 grep -q 'AUTOPILOT_REVIEWER_MODEL.*Ultimate' "$AGENTS" && pass "reviewer default change documented" || fail "reviewer default change undocumented"
 grep -q 'NEIL_AUTOPILOT_LOG_DIR.*Library/Logs/neil-autopilot' "$AGENTS" && pass "log-root default change documented" || fail "log-root default change undocumented"
-allowed='AUTOPILOT_REVIEWER_MODEL|NEIL_AUTOPILOT_LOG_DIR'
+# AUTOPILOT_PLATFORM 从硬编码 qoder 改回 auto：这是把代码向文档对齐（AGENTS.md 与 README
+# 一直写的就是 auto = 自动检测 qoder>claude>codex），而不是改变约定。硬编码 qoder 会让
+# 只装了 claude/codex 的主机上自动检测永不生效，dispatch 必败后还会被当成链路故障
+# 重试到耗尽，诊断方向完全错。
+grep -q 'AUTOPILOT_PLATFORM.*auto' "$AGENTS" && pass "platform default change documented" || fail "platform default change undocumented"
+allowed='AUTOPILOT_REVIEWER_MODEL|NEIL_AUTOPILOT_LOG_DIR|AUTOPILOT_PLATFORM'
 extract_defaults() {
   grep -Eo '\$\{[A-Z][A-Z0-9_]*:-[^}]*\}' | LC_ALL=C sort -u
 }
 git -C "$ROOT" show "$BASE_BRANCH:scripts/run-track-a.sh" | extract_defaults > "$WORK/master-defaults"
 extract_defaults < "$SCRIPT_DIR/run-track-a.sh" > "$WORK/current-defaults"
-extra_defaults="$(awk -F'[:-]' '
+# 白名单只能有一份：以前 awk 里又硬编码了一遍名字，两处一旦不同步，$allowed 就只是
+# 个装饰变量而真正生效的是 awk 里的那份。现在用 -v 传进去，彻底消除漂移。
+extra_defaults="$(awk -F'[:-]' -v allow="$allowed" '
   NR==FNR { old[$1]=$0; next }
-  $1 in old && old[$1] != $0 && $1 !~ /(AUTOPILOT_REVIEWER_MODEL|NEIL_AUTOPILOT_LOG_DIR)/ { print old[$1] " -> " $0 }
+  $1 in old && old[$1] != $0 && $1 !~ allow { print old[$1] " -> " $0 }
 ' "$WORK/master-defaults" "$WORK/current-defaults")"
 [ -z "$extra_defaults" ] && pass "no third existing default changed" || { fail "unwhitelisted default change detected"; printf '%s\n' "$extra_defaults"; }
 

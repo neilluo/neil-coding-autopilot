@@ -5,19 +5,49 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DAILY_ANALYSIS="$SCRIPT_DIR/daily-analysis.sh"
 LABEL="com.neil.autopilot.daily"
 [ -f "$DAILY_ANALYSIS" ] || { echo "ERROR: missing sibling script: $DAILY_ANALYSIS" >&2; exit 1; }
-usage() { echo "Usage: install-daily-schedule.sh [--hour H] [--log-dir DIR] [--stage-scripts|--no-stage]"; }
+usage() { echo "Usage: install-daily-schedule.sh [--hour H] [--log-dir DIR] [--stage-scripts|--no-stage] [--check-staged]"; }
 
-HOUR=13; LOG_DIR=""; STAGE_MODE="auto"
+HOUR=13; LOG_DIR=""; STAGE_MODE="auto"; CHECK_STAGED=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --hour) [ "$#" -ge 2 ] || { usage >&2; exit 1; }; HOUR="$2"; shift 2 ;;
     --log-dir) [ "$#" -ge 2 ] || { usage >&2; exit 1; }; LOG_DIR="$2"; shift 2 ;;
     --stage-scripts) STAGE_MODE="yes"; shift ;;
     --no-stage) STAGE_MODE="no"; shift ;;
+    --check-staged) CHECK_STAGED=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown arg: $1 (use --help)" >&2; exit 1 ;;
   esac
 done
+
+# --check-staged：报告 staged 副本是否落后于仓库，并以退出码区分。
+# 为何需要它：macOS TCC 不允许 launchd 派生的进程读 Desktop 下的插件源码，所以
+# 定时任务只能跑一份 staged 副本，而副本不会自动跟随仓库更新——这一点已经真
+# 实坑过：代码侧修好了 TCC 问题，但机器上的 plist 一个多月没重生成，能力为零。
+# 副本侧（launchd）自己没法发现过期（读不到源码），所以检测必须由仓库侧发起。
+if [ "$CHECK_STAGED" -eq 1 ]; then
+  staged="${AUTOPILOT_STAGED_SCRIPTS:-$HOME/Library/Application Support/neil-autopilot/scripts}"
+  if [ ! -d "$staged" ]; then
+    echo "no staged copy at: $staged (nothing scheduled, or --no-stage was used)"
+    exit 0
+  fi
+  stale=0
+  for f in "$SCRIPT_DIR"/*.sh; do
+    b="$(basename "$f")"
+    if [ ! -f "$staged/$b" ] || ! cmp -s "$f" "$staged/$b"; then
+      echo "STALE: $b differs from the staged copy"
+      stale=$(( stale + 1 ))
+    fi
+  done
+  if [ "$stale" -eq 0 ]; then
+    echo "staged copy is up to date: $staged"
+    exit 0
+  fi
+  echo ""
+  echo "$stale script(s) changed since the staged copy was made; the scheduled job still runs the OLD code."
+  echo "Refresh it with: bash \"$SCRIPT_DIR/install-daily-schedule.sh\" --hour $HOUR --stage-scripts"
+  exit 3
+fi
 case "$HOUR" in ''|*[!0-9]*) echo "ERROR: --hour must be an integer 0-23" >&2; exit 1 ;; esac
 [ "$HOUR" -le 23 ] || { echo "ERROR: --hour must be 0-23" >&2; exit 1; }
 [ -n "$LOG_DIR" ] || LOG_DIR="${NEIL_AUTOPILOT_LOG_DIR:-${HOME:-}/Library/Logs/neil-autopilot}"

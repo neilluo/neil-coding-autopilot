@@ -87,17 +87,26 @@ if [ -x "$SCRIPT_DIR/kb-path.sh" ]; then
   GLOBAL_KB="$("$SCRIPT_DIR/kb-path.sh" 2>/dev/null || true)"
 fi
 
-# Build the grep -E alternation pattern from whitespace-separated keywords.
-PATTERN=""
+# 关键词得当**字面串**搜，不能拼成 ERE。旧写法把关键词用 `|` 拼进 `grep -iE`，一旦
+# 查询含正则元字符（代码检索里极常见：`dispatch(`、`*args`、`arr[0`），整个 alternation
+# 成为非法 ERE，grep exit 2 又被下方 `2>/dev/null || true` 吞掉 → files="" → 输出
+# "(no prior-art hits)" 并 exit 0：字面文本明明在 KB 里，却**静默零命中**，
+# explore/analyze 因此拿不到本应命中的历史经验。实测：--query "dispatch" 有 3 条命中，
+# --query "dispatch(" 零命中。
+# 改用 `grep -F` 多个 `-e`（= OR），天然免疫元字符；bash 3.2 支持数组，故用数组传参。
+GREP_ARGS=()
+# 分词前必须关掉 glob（`set -f`）：`$QUERY` 不加引号做分词时，每个词还会经历
+# 路径名展开。已实测：同一个 `--query "*.md"`，在含 md 文件的目录里跑得到 6 行命中
+# （关键词被换成 CWD 里的文件名 notes.md/readme.md，于是搜的是字面 "notes.md"），
+# 在无 md 文件的目录里跑得到 "(no prior-art hits)" —— 同一查询因 CWD 而结果不同、
+# 且无任何报错，正是本次要消的“静默错误结果”类别，只是从 grep 层挑到了 shell 层。
+set -f
 for kw in $QUERY; do
-  if [ -z "$PATTERN" ]; then
-    PATTERN="$kw"
-  else
-    PATTERN="$PATTERN|$kw"
-  fi
+  GREP_ARGS+=( -e "$kw" )
 done
+set +f
 
-if [ -z "$PATTERN" ]; then
+if [ "${#GREP_ARGS[@]}" -eq 0 ]; then
   echo "(no prior-art hits)"
   exit 0
 fi
@@ -111,14 +120,14 @@ search_source() {
   [ -d "$dir" ] || return 0
 
   local files
-  files="$(grep -rilE "$PATTERN" "$dir" 2>/dev/null || true)"
+  files="$(grep -rilF "${GREP_ARGS[@]}" "$dir" 2>/dev/null || true)"
   [ -n "$files" ] || return 0
 
   local f relpath firstline
   printf '%s\n' "$files" | while IFS= read -r f; do
     [ -n "$f" ] || continue
     relpath="${f#"$base_for_relpath"/}"
-    firstline="$(grep -m 1 -iE "$PATTERN" "$f" 2>/dev/null || true)"
+    firstline="$(grep -m 1 -iF "${GREP_ARGS[@]}" "$f" 2>/dev/null || true)"
     firstline="$(printf '%s' "$firstline" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
     printf '[%s] %s: %s\n' "$label" "$relpath" "$firstline" >> "$RESULTS_FILE"
   done

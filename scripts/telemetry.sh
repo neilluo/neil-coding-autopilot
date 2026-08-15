@@ -51,24 +51,65 @@ _telemetry_num() {
   return 0
 }
 
+# ── internal: 把一个可能尚不存在的绝对路径归一到物理路径 ────────────────
+# 向上找到第一个**存在的**祖先目录做 `cd && pwd -P`，再拼回剩余组件。
+# 只回退一级父目录是不够的：当 root 与其直接父目录都不存在时（如
+# NEIL_AUTOPILOT_LOG_DIR=/tmp/<repo>/logs/tm 而 logs/ 还没建），root_phys 会保持字面量
+# 不归一，于是 macOS 上 /tmp → /private/tmp 的符链别名又能绕过 C12 守卫，
+# 把遥测目录建进业务仓库并被 `git add -A` 提交。bash 3.2 安全写法。
+_telemetry_phys_path() {
+  local p="${1:-}" suffix=""
+  case "$p" in
+    /*) ;;
+    *) printf '%s' "$p"; return 0 ;;
+  esac
+  while [ ! -d "$p" ] && [ "$p" != "/" ] && [ -n "$p" ]; do
+    suffix="/$(basename "$p")$suffix"
+    p="$(dirname "$p")"
+  done
+  if [ -d "$p" ]; then
+    printf '%s%s' "$(cd "$p" 2>/dev/null && pwd -P || printf '%s' "$p")" "$suffix"
+  else
+    printf '%s%s' "$p" "$suffix"
+  fi
+  return 0
+}
+
 # ── telemetry_log_root: resolve $LOG_ROOT, apply CWD safety guard, grow dirs ─
 # Echoes the resolved root, or empty string if unusable. Always returns 0.
+# 注：本文件是被 source 的，所有临时变量必须 local，否则会污染调用方的 shell。
 telemetry_log_root() {
-  local root="" cwd=""
+  local root="" cwd_phys="" cwd_logical="" root_phys="" fallback="" parent="" c=""
   root="${NEIL_AUTOPILOT_LOG_DIR:-${HOME:-}/Library/Logs/neil-autopilot}"
   if [ -z "$root" ]; then
     echo ""
     return 0
   fi
+  fallback="${TMPDIR:-/tmp}/neil-autopilot-logs-analysis"
 
   # Safety guard (C12): never let telemetry land inside the business project's
   # CWD, or `git add -A` in run-track-a.sh would sweep logs into a real commit.
-  cwd="$(pwd -P 2>/dev/null || pwd)"
+  #
+  # 旧实现直接拿**未规范化的 $root 字面量**去比 `pwd -P` 的物理路径，两类真实输入
+  # 都能绕过它（均已实测复现，直接在业务 CWD 里建出了目录）：
+  #   ① 相对路径：NEIL_AUTOPILOT_LOG_DIR=logs 不以 $cwd 开头，case 不命中，而它本质就是
+  #     相对 CWD 解析的 —— 相对路径一律当作“落在业务目录内”处理。
+  #   ② 符链别名：macOS 的 /tmp 是 /private/tmp 的符链，业务仓在 /tmp/proj 时
+  #     `pwd -P` 得 /private/tmp/proj，而用户设 /tmp/proj/logs 字面量就对不上。
+  # 因此：先强制绝对路径，再把两侧都归一到物理路径后比较（目录可能尚不存在，
+  # 退而解析其父目录），并同时对照物理 cwd 与逻辑 cwd。
   case "$root" in
-    "$cwd"|"$cwd"/*)
-      root="${TMPDIR:-/tmp}/neil-autopilot-logs-analysis"
-      ;;
+    /*) ;;
+    *) root="$fallback" ;;
   esac
+  cwd_phys="$(pwd -P 2>/dev/null || pwd)"
+  cwd_logical="${PWD:-$cwd_phys}"
+  root_phys="$(_telemetry_phys_path "$root")"
+  for c in "$cwd_phys" "$cwd_logical"; do
+    [ -n "$c" ] || continue
+    case "$root_phys" in "$c"|"$c"/*) root="$fallback"; break ;; esac
+    case "$root" in "$c"|"$c"/*) root="$fallback"; break ;; esac
+  done
 
   if ! mkdir -p "$root/runs" "$root/metrics" "$root/reports" 2>/dev/null; then
     echo ""

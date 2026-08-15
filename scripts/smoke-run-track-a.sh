@@ -18,15 +18,33 @@
 #
 # Usage: bash scripts/smoke-run-track-a.sh    # 0 = all pass, 1 = failure.
 set -uo pipefail
-unset AUTOPILOT_RUN_ID
+# 清场：把开发机 shell 里所有 AUTOPILOT_* 旋钮清掉，再只设本测试需要的。
+# 之前只 unset 了 RUN_ID / ROLE，其余约 20 个旋钮会直接泄漏进被测 runner，造成假失败
+# 或语义扭曲（已实测：本机 shell 里就存在已导出的 AUTOPILOT_TIMEOUT）。具体危害例子：
+#   • AUTOPILOT_TIMEOUT_IMPLEMENT 泄漏 → 场景 5 只设了 AUTOPILOT_TIMEOUT，而分阶段变量优先级更高，
+#     stub 会睡满 30s、墙钟断言假失败；
+#   • AUTOPILOT_EMPTY_LOG_BYTES 泄漏到 >400 → stub 的填充输出全被当成 EMPTY；
+#   • AUTOPILOT_SILENT_EFFORT= 泄漏 → 降档断言假失败。
+# 本文件开头那段关于 NEIL_AUTOPILOT_LOG_DIR 的注释已证明“开发机常驻 export”是真实事故模式。
+# 保留 AUTOPILOT_SMOKE_SANDBOX（smoke-all 的沙箱标记，属测试 harness 而非生产旋钮）。
+_smoke_sandbox_keep="${AUTOPILOT_SMOKE_SANDBOX:-}"
+for _v in ${!AUTOPILOT_@}; do unset "$_v"; done
+unset _v
+[ -z "$_smoke_sandbox_keep" ] || export AUTOPILOT_SMOKE_SANDBOX="$_smoke_sandbox_keep"
+unset STUB_MODE
 export AUTOPILOT_ALLOW_NESTED=1
-unset AUTOPILOT_ROLE
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 RUNNER="$SCRIPT_DIR/run-track-a.sh"
 PARSE_MARKERS="$SCRIPT_DIR/parse-markers.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+# 遥测隔离必须无条件覆盖，不能用 `:=` 兑底：安装指引让使用者把
+# NEIL_AUTOPILOT_LOG_DIR export 进 .zshrc，所以开发机的 shell 里它几乎总是已设值——
+# 那时 `:=` 不生效，单跑本脚本就会把数百条 TestModel 假事件写进生产日志根
+# （已实测到：以为修好了，单跑几次后生产 runs/ 里又多出 28 个 smoke-* 目录）。
+# 单个用例如需断言遥测内容，自己在命令行上内联设该变量即可覆盖本行。
+export NEIL_AUTOPILOT_LOG_DIR="$WORK/telemetry"
 FAILED=0
 
 # ── stub qodercli: reviewer→REVIEW_PASS; implementer/fixer→change file + DONE ──
@@ -52,6 +70,18 @@ case "${STUB_MODE:-}" in
     # trap "" TERM so kill -TERM doesn't kill us, forcing KILL_AFTER
     trap "" TERM
     sleep 30
+    exit 0
+    ;;
+  silent_dirty)
+    # 「干完活一言不发」：先改盘，再零输出 exit 0。实测中模型把整个回合收在
+    # thinking/redacted_thinking 里（工具已跑完、文件已落盘）就是这个形状。
+    # 只作用于 implementer/fixer；reviewer 正常干活，否则测不出“verify+CR 接管”这个行为。
+    if grep -q "代码审查专家" "$attach" 2>/dev/null; then
+      printf 'review output %0400d\n' 0
+      echo "REVIEW_PASS"
+      exit 0
+    fi
+    echo "silent work $(date +%s)-$RANDOM" >> "$wdir/silent-proof.txt"
     exit 0
     ;;
   review_body_unknown)
@@ -155,6 +185,10 @@ d1=$(grep -c '^\*\*Status\*\*: DONE$' "$P1/autopilot/changes/smoke/tasks.md" || 
 [ "$d1" -eq 2 ] && pass "2 tasks DONE" || fail "DONE count=$d1 (expected 2)"
 c1=$( cd "$P1" && git log --oneline 2>/dev/null | grep -c 'autopilot(track-a)' || true )
 [ "$c1" -eq 2 ] && pass "2 commits" || fail "commit count=$c1 (expected 2)"
+# harness 自己的运行期产物绝不能被 git add -A 卷进业务提交（已实测到 .lock/pid
+# 与 .lock/epoch 被提交）。这里直接断言提交内容，而不是断言锁的存放位置。
+lockfiles1=$( cd "$P1" && git log --name-only --pretty=format: 2>/dev/null | grep -c '\.lock/' || true )
+[ "$lockfiles1" -eq 0 ] && pass "no harness lock files in commits" || { fail "lock files committed ($lockfiles1)"; ( cd "$P1" && git log --name-only --pretty=format: | grep '\.lock/' | sed 's/^/    | /' ); }
 
 echo ""
 echo "===== Scenario 2: FAIL-CLOSED (verify=false, 1 task) ====="
@@ -225,7 +259,11 @@ r2=$(grep -c 'round 2' "$WORK/s4.log" || true)
 b4=$(grep -c '^\*\*Status\*\*: BLOCKED$' "$P4/autopilot/changes/smoke/tasks.md" || true)
 [ "$b4" -ge 1 ] && pass "task BLOCKED" || fail "BLOCKED count=$b4 (expected ≥1)"
 
-# ④ no fixer dispatched — no "fix" dispatch line in driver log
+# ④ no fixer dispatched — 行为证据优先：此场景下 stub 全部返回 transport 故障、从不写
+#    stub-proof.txt，所以“没有任何 worker 真正跑过”可以直接用文件不存在来钉。
+#    日志 grep 只作为辅助：它既依赖 driver 的自由格式措辞（措辞一改就恒为 0、
+#    “transport 误派 fixer”的回归静默通过），模式也过宽（`fix.*dispatch` 能命中 prefix/suffix）。
+[ ! -f "$P4/stub-proof.txt" ] && pass "no worker actually ran (behavioural: stub-proof absent)" || fail "a worker ran despite transport exhaustion"
 fix4=$(grep -c '→ dispatch.*fix\|fix.*→ dispatch\|dispatch(.*fix\|fix.*dispatch' "$WORK/s4.log" || true)
 [ "$fix4" -eq 0 ] && pass "no fixer dispatched" || { fail "fixer was dispatched ($fix4 times)"; grep -i 'fix' "$WORK/s4.log" | sed 's/^/    | /'; }
 
@@ -288,6 +326,20 @@ fix6=$(grep -c 'fix.*dispatch\|dispatch.*fix' "$WORK/s6.log" || true)
 r2_6=$(grep -c 'round 2' "$WORK/s6.log" || true)
 [ "$r2_6" -ge 1 ] && pass "round advances to 2" || { fail "round 2 never appears"; grep 'round' "$WORK/s6.log" | sed 's/^/    | /'; }
 
+# ④ 最高危不变量：CR 判 FAIL 就**绝不能** commit、绝不能标 DONE。
+# 之前本场景只断言了“没重试 / 派了 fixer / 进了 round 2”，`rc6` 捕获后再无引用，
+# 于是“CR 判 FAIL 却照样提交并把 Task 标成 DONE”这条回归完全无网：只要驱动仍然
+# 打印 fix dispatch 与 round 2，它照样全绿。而全套用例里 no-commit 只覆盖了 verify 失败
+# （Scenario 2）与 commit hook 失败（Scenario 3），**CR 失败路径一条都没有**。
+T6="$P6/autopilot/changes/smoke/tasks.md"
+[ "$rc6" -eq 2 ] && pass "CR-fail exhausts rounds and exits 2 (fail-closed)" || { fail "exit=$rc6 (expected 2)"; tail -10 "$WORK/s6.log" | sed 's/^/    | /'; }
+d6=$(grep -c '^\*\*Status\*\*: DONE$' "$T6" || true)
+[ "$d6" -eq 0 ] && pass "CR-fail never marks the Task DONE" || fail "Task marked DONE despite REVIEW_FAIL ($d6)"
+b6=$(grep -c '^\*\*Status\*\*: BLOCKED$' "$T6" || true)
+[ "$b6" -eq 1 ] && pass "CR-fail marks the Task BLOCKED" || fail "expected 1 BLOCKED status line, got $b6"
+c6=$( ( cd "$P6" && git log --oneline 2>/dev/null | grep -c 'autopilot(track-a)' ) || true )
+[ "$c6" -eq 0 ] && pass "CR-fail commits nothing" || fail "unreviewed work committed ($c6 autopilot commits)"
+
 echo ""
 echo "===== Scenario 7: MARKER-ANCHOR integration ====="
 
@@ -349,6 +401,140 @@ The work is clearly DONE from my perspective but no final marker.
 EOF
 st_d="$("$PARSE_MARKERS" status "$FIXTURE_D")"
 [ "$st_d" = "UNKNOWN" ] && pass "fixture-D (body DONE, no anchor) → UNKNOWN" || fail "fixture-D expected UNKNOWN, got $st_d"
+
+echo ""
+echo "===== Scenario 8: SILENT-BUT-PRODUCTIVE (zero output, exit 0, worktree modified) ====="
+# 真实事故：worker 干完活却只在 thinking 里收尾，stdout 零字节。对 implement 而言这不该
+# 停机：后面紧跟着 verify 门禁，而本仓原则就是“控制器自己跑 verify、绝不信自述”。
+# 但不变量不得放松：仍须 verify 通过 + 独立 CR 才能 commit。
+P8="$(make_project true 1)"
+set +e
+TMPDIR="$WORK" PATH="$STUB_BIN:$PATH" AUTOPILOT_PLATFORM=qoder \
+  STUB_MODE=silent_dirty AUTOPILOT_TRANSPORT_RETRIES=3 AUTOPILOT_RETRY_BACKOFF_S=0 \
+  bash "$RUNNER" --change-dir "$P8/autopilot/changes/smoke" --cwd "$P8" --max-rounds 2 \
+  > "$WORK/s8.log" 2>&1
+rc8=$?
+set -e
+
+grep -q 'without a verdict line' "$WORK/s8.log" && pass "unreported work is named as such" || { fail "unreported work not diagnosed"; tail -12 "$WORK/s8.log" | sed 's/^/    | /'; }
+grep -q 'letting the verify gate decide' "$WORK/s8.log" && pass "hands the decision to the verify gate" || fail "did not defer to the verify gate"
+retry8=$(grep -c 'retry in' "$WORK/s8.log" || true)
+[ "$retry8" -eq 0 ] && pass "dirty worktree is never blind-retried" || fail "silent worker retried $retry8 times on a dirty tree"
+# verify=true 且 reviewer stub 返回 REVIEW_PASS → 本轮应该真的完成（不再白白丢弃已完成的工作）
+[ "$rc8" -eq 0 ] && pass "task completes on verify+CR evidence (exit 0)" || { fail "exit=$rc8 (expected 0)"; tail -12 "$WORK/s8.log" | sed 's/^/    | /'; }
+d8=$(grep -c '^\*\*Status\*\*: DONE$' "$P8/autopilot/changes/smoke/tasks.md" || true)
+[ "$d8" -eq 1 ] && pass "task marked DONE" || fail "DONE count=$d8 (expected 1)"
+c8=$( cd "$P8" && git log --oneline 2>/dev/null | grep -c 'autopilot(track-a)' || true )
+[ "$c8" -eq 1 ] && pass "committed after verify+CR passed" || fail "commit count=$c8 (expected 1)"
+
+# 对照：同样静默改盘，但 verify 失败 → 绝不能被当成完成（不变量仍然 fail-closed）
+P8b="$(make_project false 1)"
+set +e
+TMPDIR="$WORK" PATH="$STUB_BIN:$PATH" AUTOPILOT_PLATFORM=qoder \
+  STUB_MODE=silent_dirty AUTOPILOT_TRANSPORT_RETRIES=2 AUTOPILOT_RETRY_BACKOFF_S=0 \
+  bash "$RUNNER" --change-dir "$P8b/autopilot/changes/smoke" --cwd "$P8b" --max-rounds 1 \
+  > "$WORK/s8b.log" 2>&1
+rc8b=$?
+set -e
+[ "$rc8b" -ne 0 ] && pass "silent work with FAILING verify still fails closed" || { fail "exit=$rc8b (expected non-zero)"; tail -10 "$WORK/s8b.log" | sed 's/^/    | /'; }
+c8b=$( cd "$P8b" && git log --oneline 2>/dev/null | grep -c 'autopilot(track-a)' || true )
+[ "$c8b" -eq 0 ] && pass "nothing committed when verify fails" || fail "commit count=$c8b (expected 0)"
+
+# 对照组：同样零输出但没动过盘 → 仍属可安全重试的静默，且必须立即重试（不退避）。
+# 等待对 thinking-only 回合无效，退避只会白白拖长墙钟。
+cat > "$STUB_BIN/qodercli-silent-clean" <<'CLEANSTUB'
+#!/usr/bin/env bash
+exit 0
+CLEANSTUB
+chmod +x "$STUB_BIN/qodercli-silent-clean"
+CLEAN_BIN="$WORK/bin-clean"; mkdir -p "$CLEAN_BIN"
+cp "$STUB_BIN/qodercli-silent-clean" "$CLEAN_BIN/qodercli"
+P9="$(make_project true 1)"
+set +e
+start9=$(date +%s)
+TMPDIR="$WORK" PATH="$CLEAN_BIN:$PATH" AUTOPILOT_PLATFORM=qoder \
+  AUTOPILOT_SILENT_RETRIES=4 AUTOPILOT_RETRY_BACKOFF_S=30 \
+  bash "$RUNNER" --change-dir "$P9/autopilot/changes/smoke" --cwd "$P9" --max-rounds 2 \
+  > "$WORK/s9.log" 2>&1
+rc9=$?
+elapsed9=$(( $(date +%s) - start9 ))
+set -e
+retry9=$(grep -c 'retry immediately' "$WORK/s9.log" || true)
+[ "$retry9" -eq 3 ] && pass "clean-tree silence retried immediately 3x (cap 4)" || { fail "immediate retries=$retry9 (expected 3)"; grep -n 'attempt' "$WORK/s9.log" | sed 's/^/    | /'; }
+if grep -q 'retry in 30s' "$WORK/s9.log"; then fail "silence must not use exponential backoff"; else pass "silence does not sleep on backoff"; fi
+# 退避基数设为 30s：若错误地退避，3 次重试至少要睡 30+60+120=210s。
+[ "$elapsed9" -lt 60 ] && pass "silence retry wastes no wall clock (${elapsed9}s)" || fail "silence retry slept too long (${elapsed9}s)"
+grep -q 'silent worker output (attempt 4/4)' "$WORK/s9.log" && pass "silence cap honoured (AUTOPILOT_SILENT_RETRIES)" || fail "silence cap not honoured"
+[ "$rc9" -eq 2 ] && pass "exit 2 (clean-tree silence exhausted)" || fail "exit=$rc9 (expected 2)"
+grep -q 'fail-closed, worker stayed silent' "$WORK/s9.log" && pass "silence exhaustion is not mislabelled transport" || { fail "silence exhaustion still says transport"; tail -4 "$WORK/s9.log" | sed 's/^/    | /'; }
+
+echo ""
+echo "===== Scenario 10: SILENT-MODEL FALLBACK (default model mute, fallback speaks) ====="
+# 实测依据：同一 review prompt 下 Ultimate 8/15 静默，Performance 0/6、Qwen3.8-Max 0/6。
+# 所以静默时死磕同一个模型是浪费；连续静默后换模型必须能把 Task 救回来。
+MUTE_BIN="$WORK/bin-mute"; mkdir -p "$MUTE_BIN"
+cat > "$MUTE_BIN/qodercli" <<'MUTESTUB'
+#!/usr/bin/env bash
+model=""; wdir=""; attach=""; effort="none"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -m) model="$2"; shift 2;;
+    -w) wdir="$2"; shift 2;;
+    --attachment) attach="$2"; shift 2;;
+    --reasoning-effort) effort="$2"; shift 2;;
+    -p|--permission-mode) shift 2;;
+    *) shift;;
+  esac
+done
+# 记下每次尝试实际用的推理档位，用于断言“首次不降档、重试才降档”。
+printf '%s\n' "$effort" >> "$EFFORT_LOG"
+# MuteModel 完全不开口（模拟 thinking-only 回合）；其他模型正常干活。
+if [ "$model" = MuteModel ]; then exit 0; fi
+if grep -q "代码审查专家" "$attach" 2>/dev/null; then
+  printf 'review body %0400d\n' 0
+  echo "REVIEW_PASS"
+else
+  printf 'impl body %0400d\n' 0
+  echo "work $(date +%s)-$RANDOM" >> "$wdir/fallback-proof.txt"
+  echo "**Status:** DONE"
+fi
+MUTESTUB
+chmod +x "$MUTE_BIN/qodercli"
+EFFORT_LOG="$WORK/effort.log"; : > "$EFFORT_LOG"; export EFFORT_LOG
+P10="$(make_project true 1)"
+set +e
+TMPDIR="$WORK" PATH="$MUTE_BIN:$PATH" AUTOPILOT_PLATFORM=qoder \
+  AUTOPILOT_SILENT_RETRIES=5 AUTOPILOT_SILENT_SWITCH_AFTER=2 AUTOPILOT_SILENT_FALLBACK_MODEL=SpeakModel \
+  bash "$RUNNER" --change-dir "$P10/autopilot/changes/smoke" --cwd "$P10" \
+  --impl-model MuteModel --review-model MuteModel --max-rounds 2 \
+  > "$WORK/s10.log" 2>&1
+rc10=$?
+set -e
+grep -q 'switching to SpeakModel' "$WORK/s10.log" && pass "fallback model kicks in after repeated silence" || { fail "no model switch happened"; grep -n 'silent\|switch' "$WORK/s10.log" | sed 's/^/    | /'; }
+[ "$rc10" -eq 0 ] && pass "fallback rescues the run (exit 0)" || { fail "exit=$rc10 (expected 0)"; tail -12 "$WORK/s10.log" | sed 's/^/    | /'; }
+d10=$(grep -c '^\*\*Status\*\*: DONE$' "$P10/autopilot/changes/smoke/tasks.md" || true)
+[ "$d10" -eq 1 ] && pass "task DONE via fallback model" || fail "DONE count=$d10 (expected 1)"
+[ -s "$P10/fallback-proof.txt" ] && pass "fallback worker really did the work" || fail "no work produced by fallback"
+# 默认模型先被试过，不能一上来就降级（否则白白丢掉默认模型的质量）。
+grep -q 'silent worker output (attempt 1/5)' "$WORK/s10.log" && pass "default model is tried first" || fail "default model was skipped"
+# 降档阶梯：第一次尝试不能降档（保质量），静默后必须降档并真的透传给 CLI。
+grep -q "lowering reasoning effort to 'low'" "$WORK/s10.log" && pass "reasoning effort is lowered after silence" || fail "reasoning effort was never lowered"
+first_eff=$(sed -n '1p' "$MUTE_BIN/../effort.log" 2>/dev/null || true)
+[ "$first_eff" = "none" ] && pass "attempt 1 keeps full reasoning depth" || fail "attempt 1 effort=$first_eff (expected none)"
+later_eff=$(sed -n '2p' "$MUTE_BIN/../effort.log" 2>/dev/null || true)
+[ "$later_eff" = "low" ] && pass "attempt 2 runs with --reasoning-effort low" || fail "attempt 2 effort=$later_eff (expected low)"
+# 关闭开关后必须回到纯重试、不换模型。
+P11="$(make_project true 1)"
+set +e
+TMPDIR="$WORK" PATH="$MUTE_BIN:$PATH" AUTOPILOT_PLATFORM=qoder \
+  AUTOPILOT_SILENT_RETRIES=2 AUTOPILOT_SILENT_FALLBACK_MODEL= \
+  bash "$RUNNER" --change-dir "$P11/autopilot/changes/smoke" --cwd "$P11" \
+  --impl-model MuteModel --review-model MuteModel --max-rounds 1 \
+  > "$WORK/s11.log" 2>&1
+rc11=$?
+set -e
+if grep -q 'switching to' "$WORK/s11.log"; then fail "fallback ignored the opt-out"; else pass "empty AUTOPILOT_SILENT_FALLBACK_MODEL disables the switch"; fi
+[ "$rc11" -eq 2 ] && pass "opt-out still fails closed (exit 2)" || fail "exit=$rc11 (expected 2)"
 
 echo ""
 if [ "$FAILED" -eq 0 ]; then echo "SMOKE(run-track-a): ALL PASS"; exit 0; fi

@@ -70,9 +70,9 @@ OCR CLI 不可用时的降级方案。控制器生成 prompt 文件后通过 qod
 - [文件:行号] 问题描述
 
 ### 结论
-REVIEW_PASS 或 REVIEW_FAIL (有 CRITICAL/MAJOR 问题)
-
-如果没有 CRITICAL 和 MAJOR 问题，直接输出 REVIEW_PASS。
+最后一行只输出结论标记本身（`REVIEW_PASS` 或 `REVIEW_FAIL`），同一行不要追加任何说明或 # 注释：
+无 CRITICAL/MAJOR 则判 PASS，有则判 FAIL 并在上方列出问题。
+（裁决行必须独占一行，parse-markers.sh 只认这种形式；行尾带说明文字会被当成未给结论）
 ```
 
 ## 控制器调度方式

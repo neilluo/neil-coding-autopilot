@@ -112,6 +112,7 @@ flowchart TD
 | `autopilot-finish` | 顶层阶段 | 分支完成与合并：创建 PR 或合并到主干，触发 CI/CD |
 | `autopilot-evolve` | 顶层阶段 | 知识三层沉淀（raw → wiki）+ 门禁化回写 AGENTS.md，把 CR 发现的规律性问题写回知识库 |
 | `autopilot-checkpoint` | 门禁 | 工作流状态验证，阻止跳步；每个阶段完成时调用 |
+| `neil-ux-review` | 横切能力 | UX/交互/无障碍审查与改进（88 条规则库 + ESLint/axe/Playwright/Lighthouse 探针 + 反模式红线），可独立触发或被 `autopilot-review` 复用 |
 
 ## 底层脚本原语
 
@@ -232,10 +233,10 @@ bash scripts/run-track-a.sh --change-dir autopilot/changes/<feature> --cwd "$PRO
 | `AUTOPILOT_PLAN_MODEL` | Ultimate | Task 拆解阶段模型（需强推理） |
 | `AUTOPILOT_IMPLEMENTER_MODEL` | Performance | 编码型 worker 模型 |
 | `AUTOPILOT_REVIEWER_MODEL` | Ultimate | 审查型 worker 模型 |
-| `AUTOPILOT_FIXER_MODEL` | Performance | 修复型 worker 模型 |
+| `AUTOPILOT_FIXER_MODEL` | 跟随 `AUTOPILOT_IMPLEMENTER_MODEL` | 修复型 worker 模型（未设时跟随 implementer） |
 | `AUTOPILOT_INIT_MODEL` | Performance | Harness 初始化阶段模型 |
 | `AUTOPILOT_EVOLVE_MODEL` | Ultimate | 知识沉淀阶段模型（需强归纳） |
-| `AUTOPILOT_MAX_PARALLEL` | 3 | 最大并行 Task 数 |
+| `AUTOPILOT_MAX_PARALLEL` | （未实现，保留名） | loop 按设计**串行**执行（per-change 锁排他）；代码零引用，设了不生效 |
 
 支持平台：**Qoder**（qodercli）、**Claude Code**（claude）、**Codex CLI**（codex）。
 
@@ -307,7 +308,7 @@ autopilot/
 
 ### 成本与时延观测
 
-每次 worker 调度会在 `$NEIL_AUTOPILOT_LOG_DIR/runs/YYYY-MM-DD.jsonl` 写一条 `event="dispatch"`。可直接查看 `duration_s`、`stage`、`model`、`attempt`、`failure_class`；Qoder 且本机有 `jq` 时，还会从 `qodercli -o json` 信封记录真实 `input_tokens`、`output_tokens`、`cache_read_tokens` 与 `cost_usd`。字段拿不到时会省略，不会写 `0` 冒充已知值。
+每次 worker 调度会在 `$NEIL_AUTOPILOT_LOG_DIR/runs/YYYY-MM-DD.jsonl` 写一条 `event="dispatch"`。可直接查看 `duration_s`、`stage`、`model`、`attempt`、`failure_class`。真实 `input_tokens`、`output_tokens`、`cache_read_tokens` 与 `cost_usd` **默认不采集**：它们来自 `qodercli -o json` 信封，而该开关（`AUTOPILOT_USAGE_JSON`）默认为 `0` —— 因为带 `-o json` 时 headless 工具循环会停在首个 tool_use、工具根本不执行（实测 0/5 成功）。仅在纯只读的统计场景才值得显式设 `AUTOPILOT_USAGE_JSON=1`（且本机有 `jq`）。字段拿不到时会省略，不会写 `0` 冒充已知值。
 
 按 stage 和 model 聚合当日调用数、耗时、token 与成本：
 

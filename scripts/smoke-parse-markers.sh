@@ -91,4 +91,30 @@ F7="$TMPDIR_SMOKE/case7.txt"
 printf 'Status：DONE\n' > "$F7"
 assert_eq "edge2 chinese-colon" "DONE" "$(bash "$PARSE" status "$F7")"
 
+# ── 回归：锚定集合必须认得本系统自己要求 worker 输出的形式 ────────────────
+# run-track-a 的报告格式写的是带列表符的 `- **Status:** DONE`；run-autopilot 写的是
+# 带反引号的 `` `FINISH_STATUS=DONE` ``。旧实现两者都解不出来，导致 worker 按要求
+# 报了数却被当成无结论 → fail-closed。
+while IFS='|' read -r label mode line want; do
+  [ -n "$label" ] || continue
+  FCASE="$TMPDIR_SMOKE/contract-$label.txt"
+  printf '%s\n' "$line" > "$FCASE"
+  assert_eq "contract $label" "$want" "$(bash "$PARSE" "$mode" "$FCASE")"
+done <<'CASES'
+bullet-bold-status|status|- **Status:** DONE|DONE
+finish-status-eq|status|FINISH_STATUS=DONE|DONE
+finish-status-backticked|status|`FINISH_STATUS=DONE`|DONE
+evolve-status-bullet|status|- `EVOLVE_STATUS=BLOCKED`|BLOCKED
+review-bold|review|**REVIEW_PASS**|REVIEW_PASS
+review-backticked|review|`REVIEW_FAIL`|REVIEW_FAIL
+review-bullet|review|- REVIEW_PASS|REVIEW_PASS
+CASES
+
+# 误报防线：行中提及不算结论，否则任何讨论文字都能冒充裁决。
+FFP="$TMPDIR_SMOKE/case-fp.txt"
+printf 'the worker reported Status: DONE earlier in the run\n' > "$FFP"
+assert_eq "fp mid-line-status" "UNKNOWN" "$(bash "$PARSE" status "$FFP")"
+printf 'if FINISH_STATUS=BLOCKED then stop\n' > "$FFP"
+assert_eq "fp mid-line-finish-status" "UNKNOWN" "$(bash "$PARSE" status "$FFP")"
+
 echo "PASS smoke-parse-markers.sh"

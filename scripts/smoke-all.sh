@@ -41,7 +41,19 @@ done
 
 SMOKE_LIST="$(mktemp)"
 SMOKE_OUTPUT="$(mktemp)"
-trap 'rm -f "$SMOKE_LIST" "$SMOKE_OUTPUT"' EXIT
+# 遥测沙箱（单一收口点）：smoke 会跑完整 Track A loop 与 dispatch，每一步都 emit 遥测。
+# 不隔离就会写进生产日志根：实测某日 640 条事件里 599 条来自 smoke、runs/ 积下
+# 1081 个 smoke-* 目录、144 条 model=TestModel——daily-analysis 聚合出来的就是假数据，
+# 而那份报告正是自进化建议的依据。在这里 export（而不是逐个 smoke 改）：子进程
+# 全部继承，新增 smoke 也自动安全。
+SMOKE_TM_ROOT="$(mktemp -d)"
+export NEIL_AUTOPILOT_LOG_DIR="$SMOKE_TM_ROOT/telemetry"
+# 显式标记“已由 smoke-all 沙箱化”。它存在的意义：单个 smoke 脚本可以分得清
+# “我的 NEIL_AUTOPILOT_LOG_DIR 是上游沙箱”与“它是用户 .zshrc 里指向生产日志根的值”：
+# 前者必须**继承**（否则下方的隔离自检 canary 就看不到事件、形同虚设），
+# 后者必须**覆盖**（否则单跑某个 smoke 就把假事件写进生产日志）。
+export AUTOPILOT_SMOKE_SANDBOX=1
+trap 'rm -f "$SMOKE_LIST" "$SMOKE_OUTPUT"; rm -rf "$SMOKE_TM_ROOT"' EXIT
 
 for smoke in "$SCRIPT_DIR"/smoke-*.sh; do
   [ -f "$smoke" ] || continue
@@ -73,5 +85,13 @@ while IFS= read -r smoke; do
     exit 1
   fi
 done < "$SMOKE_LIST"
+
+# 隔离自检：上面跑过 dispatch / Track A loop，遥测必须落在沙箱里。沙箱为空意味着
+# 事件写到了沙箱之外（大概率是生产日志根），这比 smoke 本身挂掉更隐蔽，所以显式报错。
+if [ -z "$ONLY" ] && [ ! -d "$NEIL_AUTOPILOT_LOG_DIR/runs" ]; then
+  echo "FAIL telemetry isolation: no events landed in the smoke sandbox ($NEIL_AUTOPILOT_LOG_DIR)"
+  echo "     smoke telemetry may be leaking into the production log root."
+  exit 1
+fi
 
 exit 0
