@@ -222,6 +222,16 @@ telemetry_emit_dispatch() {
       "$(telemetry_json_escape "$stage")" \
       "$(telemetry_json_escape "$model")" \
       "$dur" "$exit_code")
+    # channel 区分「谁在干活」：cli = headless worker 进程（单独计费、fresh context），
+    # subagent = 主控会话内的 subagent（计费归主控会话、共享上下文）。
+    # 没有这个字段时，两条路径的成本/耗时根本无法对比 —— 2026-08-16 那个
+    # 9h37min / 13128 credits 的整夜就是因为 subagent 路径完全不写遥测而彻底不可归因。
+    if [ -n "${AUTOPILOT_TM_CHANNEL:-}" ]; then
+      json="$json,\"channel\":\"$(telemetry_json_escape "$AUTOPILOT_TM_CHANNEL")\""
+    fi
+    if [ -n "${AUTOPILOT_TM_TASK:-}" ]; then
+      json="$json,\"task\":\"$(telemetry_json_escape "$AUTOPILOT_TM_TASK")\""
+    fi
     if [ -n "${AUTOPILOT_TM_INPUT_TOKENS:-}" ]; then
       value="$(_telemetry_int "$AUTOPILOT_TM_INPUT_TOKENS")"
       json="$json,\"input_tokens\":$value"
@@ -260,6 +270,28 @@ telemetry_emit_dispatch() {
     if [ -n "${AUTOPILOT_TM_OUTPUT_BYTES:-}" ]; then
       value="$(_telemetry_int "$AUTOPILOT_TM_OUTPUT_BYTES")"
       json="$json,\"output_bytes\":$value"
+    fi
+    # stderr 字节数必须与 stdout 分开记：两股流合并后，「CLI 一个字没说」与
+    # 「我们把 stderr 丢了」在日志里长得一模一样（已在 2026-08-16 的排查里卡住一次）。
+    if [ -n "${AUTOPILOT_TM_STDERR_BYTES:-}" ]; then
+      value="$(_telemetry_int "$AUTOPILOT_TM_STDERR_BYTES")"
+      json="$json,\"stderr_bytes\":$value"
+    fi
+    # session_id 是事后取证的钥匙：凭它能直接定位 CLI 落盘的完整回合 transcript。
+    if [ -n "${AUTOPILOT_TM_SESSION_ID:-}" ]; then
+      json="$json,\"session_id\":\"$(telemetry_json_escape "$AUTOPILOT_TM_SESSION_ID")\""
+    fi
+    # 取证结论（REPORTED / WORK_DONE_UNREPORTED / TRUNCATED_TOOL_USE / THINKING_ONLY）。
+    # 这是区分「重试安全」与「重试会叠在半成品上」的唯一字段，必须进自进化数据。
+    if [ -n "${AUTOPILOT_TM_FORENSIC_VERDICT:-}" ]; then
+      json="$json,\"forensic_verdict\":\"$(telemetry_json_escape "$AUTOPILOT_TM_FORENSIC_VERDICT")\""
+    fi
+    if [ -n "${AUTOPILOT_TM_STOP_REASON:-}" ]; then
+      json="$json,\"stop_reason\":\"$(telemetry_json_escape "$AUTOPILOT_TM_STOP_REASON")\""
+    fi
+    if [ -n "${AUTOPILOT_TM_TOOL_CALLS:-}" ]; then
+      value="$(_telemetry_int "$AUTOPILOT_TM_TOOL_CALLS")"
+      json="$json,\"tool_calls\":$value"
     fi
     case "${AUTOPILOT_TM_IS_ERROR:-}" in
       true|false) json="$json,\"is_error\":${AUTOPILOT_TM_IS_ERROR}" ;;

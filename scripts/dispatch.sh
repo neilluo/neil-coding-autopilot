@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 CHILD_PID=""
 OUTPUT_FILE=""
 RESULT_FILE=""
+STDERR_FILE=""
 cleanup() {
   if [ -n "$CHILD_PID" ] && kill -0 "$CHILD_PID" 2>/dev/null; then
     kill -TERM "$CHILD_PID" 2>/dev/null || true
@@ -16,6 +17,7 @@ cleanup() {
   fi
   [ -z "$OUTPUT_FILE" ] || rm -f "$OUTPUT_FILE"
   [ -z "$RESULT_FILE" ] || rm -f "$RESULT_FILE"
+  [ -z "$STDERR_FILE" ] || rm -f "$STDERR_FILE"
 }
 # 信号路径必须**当场结束**，不能回落主流程。旧写法把三个事件挂在同一个 handler 上
 # （`trap cleanup EXIT SIGTERM SIGINT`），而 handler 执行完不退出，于是脚本从 `wait` 之后
@@ -29,6 +31,7 @@ cleanup() {
 _on_signal() {
   local code="${1:-143}"
   if [ -n "$OUTPUT_FILE" ] && [ -s "$OUTPUT_FILE" ]; then command cat "$OUTPUT_FILE" || true; fi
+  if [ -n "$STDERR_FILE" ] && [ -s "$STDERR_FILE" ]; then command cat "$STDERR_FILE" >&2 || true; fi
   cleanup
   exit "$code"
 }
@@ -46,6 +49,11 @@ STAGE="${AUTOPILOT_STAGE:-other}"
 KILL_AFTER="${AUTOPILOT_KILL_AFTER_S:-30}"
 INHERITED_ROLE="${AUTOPILOT_ROLE:-}"
 STOP_REASON=""
+# 取证字段（由 session-forensics.sh 回填）。必须先置空：本脚本跑 set -u，
+# 而它们只在静默分支里赋值，末尾的 export 却无条件引用。
+AUTOPILOT_TM_FORENSIC_VERDICT=""
+AUTOPILOT_TM_STOP_REASON=""
+AUTOPILOT_TM_TOOL_CALLS=""
 
 usage() {
   echo "Usage: dispatch.sh --model MODEL --cwd DIR --prompt-file FILE --instruction TEXT [--timeout SECS]"
@@ -103,8 +111,22 @@ if [ "$PLATFORM" = auto ]; then PLATFORM="$(detect_platform)"; fi
 # constructed variable name so hostile or malformed stage text is never
 # interpreted as shell syntax.
 TIMEOUT=""
+# 记下超时值的来源。超时窗口直接等于「一个卡死的 worker 最多能烧多少钱」：worker 被杀之前
+# 生成的 token 照付，而成果全部丢弃（TIMEOUT 在 run-track-a.sh 里是 fail-closed、不重试）。
+# 所以「是谁定的这个上限」必须进日志——否则一个全局环境变量把某阶段的窗口悄悄拉宽 3 倍，
+# 事后从日志里完全看不出来。
+TIMEOUT_SRC=""
+# 阶段内置默认值提到外面单独算（原先埋在最后的 else 里），因为下面要拿它来判断
+# 「全局 AUTOPILOT_TIMEOUT 是否把这个阶段的上限抬高了」。数值本身未变。
+case "$STAGE" in
+  review) STAGE_DEFAULT_TIMEOUT=900 ;;
+  implement) STAGE_DEFAULT_TIMEOUT=1800 ;;
+  fix) STAGE_DEFAULT_TIMEOUT=900 ;;
+  *) STAGE_DEFAULT_TIMEOUT=600 ;;
+esac
 if [ -n "$CLI_TIMEOUT" ]; then
   TIMEOUT="$CLI_TIMEOUT"
+  TIMEOUT_SRC="--timeout"
 else
   STAGE_KEY="$(printf '%s' "$STAGE" | tr '[:lower:]' '[:upper:]')"
   case "$STAGE_KEY" in
@@ -116,31 +138,99 @@ else
   esac
   if [ -n "$STAGE_TIMEOUT" ]; then
     TIMEOUT="$STAGE_TIMEOUT"
+    TIMEOUT_SRC="$STAGE_TIMEOUT_NAME"
   elif [ -n "${AUTOPILOT_TIMEOUT:-}" ]; then
     TIMEOUT="$AUTOPILOT_TIMEOUT"
+    TIMEOUT_SRC="AUTOPILOT_TIMEOUT"
   else
-    case "$STAGE" in
-      review) TIMEOUT=900 ;;
-      implement) TIMEOUT=1800 ;;
-      fix) TIMEOUT=900 ;;
-      *) TIMEOUT=600 ;;
-    esac
+    TIMEOUT="$STAGE_DEFAULT_TIMEOUT"
+    TIMEOUT_SRC="stage-default"
   fi
 fi
-printf 'dispatch: stage=%s timeout=%ss kill-after=%ss model=%s\n' "$STAGE" "$TIMEOUT" "$KILL_AFTER" "$MODEL" >&2
+# 全局 AUTOPILOT_TIMEOUT 只能**收紧**、不能**放大**（省钱设计，2026-08-17）。
+# 超时窗口 = 一个卡死 worker 的烧钱上限：TIMEOUT 在 run-track-a.sh 里是 fail-closed、不重试，
+# 成果超时即整个丢弃。一个笼统的全局值若高于某阶段的内置默认（review/fix 900、其他 600），
+# 会把这些便宜阶段的烧钱窗口悄悄拉宽 2~3 倍 —— 已实测：shell profile 里一行
+# `export AUTOPILOT_TIMEOUT=1800` 就把所有阶段抬到 1800s，日志里还没有一个字提示。
+# 因此：当且仅当超时值**来自全局**且**高于**本阶段内置默认时，夹回内置默认。
+# 只夹「来自全局」这一种来源 —— CLI / 分阶段 / 收紧型全局（值更小）/ 阶段默认都原样不动；
+# 0（禁用 timeout 包装）永远不会 > 正数默认，故不受影响。要真的放大某阶段的烧钱上限，
+# 必须显式、定向地用 AUTOPILOT_TIMEOUT_<STAGE> 或 --timeout（两者优先级更高，不被夹）。
+if [ "$TIMEOUT_SRC" = "AUTOPILOT_TIMEOUT" ]; then
+  case "$TIMEOUT" in
+    ''|*[!0-9]*) : ;;   # 非数字交给下面的 timeout 包装去报错，这里只管数值比较
+    *)
+      if [ "$TIMEOUT" -gt "$STAGE_DEFAULT_TIMEOUT" ]; then
+        printf 'WARN: global AUTOPILOT_TIMEOUT=%ss exceeds stage %s built-in %ss; clamped to %ss.\n' \
+          "$TIMEOUT" "$STAGE" "$STAGE_DEFAULT_TIMEOUT" "$STAGE_DEFAULT_TIMEOUT" >&2
+        printf '      A global knob can only tighten, never inflate a burn ceiling. Use AUTOPILOT_TIMEOUT_%s to raise this stage.\n' \
+          "$STAGE_KEY" >&2
+        TIMEOUT="$STAGE_DEFAULT_TIMEOUT"
+        TIMEOUT_SRC="AUTOPILOT_TIMEOUT-clamped"
+      fi
+      ;;
+  esac
+fi
+# Session id 必须由**我们**指定，不能等 CLI 自己生成。
+# 理由（2026-08-17 定案）：worker 静默时 stdout 只有 1 字节、stderr 0 字节，CLI 什么都不说；
+# 而它把完整回合（thinking / tool_use / stop_reason）落盘在
+# `~/.qoder/projects/<物理 cwd 的 / 换成 ->/<session-id>.jsonl`。
+# 以前不 pin session-id，事后只能靠时间戳猜是哪个文件 —— 2026-08-16 那次能定案纯属运气。
+# pin 之后，session-forensics.sh 可以确定性地取证「到底干了什么、动没动盘」。
+# uuidgen 缺失时留空并降级（fail-safe：取证是加分项，绝不能因此让 dispatch 失败）。
+SESSION_ID=""
+if [ "$PLATFORM" = qoder ] && command -v uuidgen >/dev/null 2>&1; then
+  SESSION_ID="$(uuidgen 2>/dev/null | tr 'A-Z' 'a-z' || true)"
+fi
 
+# TIMEOUT_BIN 必须在版本探测**之前**解析 —— 下面要用它给探测封上超时。
 TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+
+# 头部必须写清「谁在跑」。2026-08-16 的事故里，业务仓库有一份 8-15 拷出来的 fork
+# （neil-fbi-init/.autopilot-local/scripts/），缺 worktree 指纹守卫与 EMPTY 分支，
+# 把「干完活没报数」全标成 transport 并丢弃重试；而日志里没有任何一行说明
+# **正在执行哪个文件**，于是排查方向被带偏了一整晚。脚本路径从此进日志。
+#
+# 为何这里**不**探测 CLI 版本（已实测的踩坑，勿加回来）：
+#   版本对诊断很有用（下方那段教训就是「同一版本号下行为反转」），但把
+#   `qodercli --version` 放在每次 dispatch 的关键路径上，等于引入一个无界的外部调用。
+#   实测：对一个忽略参数、`trap "" TERM; sleep 30` 的 CLI，dispatch 从 3s 拖到 33s；
+#   而且 `timeout 5 ... | head -1` 也救不了 —— TERM 被忽略，而命令替换要等管道
+#   所有写端关闭，被 KILL 的只是直接子进程、孙进程仍握着管道。
+#   所以版本只在**静默诊断分支**里取（那里已经是故障路径，且写临时文件、不经管道）。
+# timeout-src 追加在行尾，不插到中间：smoke-dispatch.sh 对 `stage=… model=…` 这段
+# 做子串断言，插进去会拆掉它。新字段一律往后加。
+printf 'dispatch: stage=%s timeout=%ss kill-after=%ss model=%s timeout-src=%s\n' \
+  "$STAGE" "$TIMEOUT" "$KILL_AFTER" "$MODEL" "$TIMEOUT_SRC" >&2
+printf 'dispatch: script=%s platform=%s session=%s attempt=%s\n' \
+  "$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")" "$PLATFORM" \
+  "${SESSION_ID:-<cli-assigned>}" "${AUTOPILOT_ATTEMPT:-1}" >&2
+
 OUTPUT_FILE="$(mktemp "${TMPDIR:-/tmp}/neil-dispatch.XXXXXX")"
+# worker 的 stderr 单独留存，不再直接继承本脚本的 stderr。
+# 否则调用方拿到的是两股流合并后的一坨，无法区分「CLI 一个字没说」与「我们把 stderr 丢了」——
+# 2026-08-16 的 74 字节日志正是卡在这个区分上（事后才确认 CLI 真的 0 字节 stderr）。
+# 采集完仍原样吐回 stderr，调用方行为不变。
+STDERR_FILE="$(mktemp "${TMPDIR:-/tmp}/neil-dispatch-err.XXXXXX")"
 START="$(date +%s)"
-# JSON 输出默认关闭 —— 这不是风格偏好，而是实测的功能性约束：带 `-o json` 时
-# headless agentic 工具循环会在首个 tool_use 处终止，工具根本不被执行。
-# 实测（同一「创建文件」任务各 5 次，macOS + qodercli 1.0.16）：
-#   带 -o json                     0/5 成功，全部 num_turns=1 / stop_reason=tool_use、文件零改动
-#   不带 -o json                   3/5 成功
-#   不带 -o json + prompt 禁前言   5/5 成功
-# 此前默认开启（为采集精确 usage/cost）导致所有 Track A worker 100% 空转。
+# JSON 输出默认关闭。注意：下面这段历史结论已在 2026-08-17 被推翻，**保留它只为记录教训**：
+#   旧结论（声称 qodercli 1.0.16）：带 `-o json` 时 headless 工具循环会停在首个 tool_use、
+#   工具根本不执行；实测 0/5 成功，不带则 3/5、加上 prompt 禁前言 5/5。
+#   2026-08-17 在**同一个版本号 1.0.16** 上重测（每变体 11 次、隔离 git repo、分流取证）：
+#       -o json      11/11 成功，且信封带 stop_reason / session_id / context_usage_ratio
+#       -o text      10/11
+#       不带 -o       9/11
+#   —— 结论完全反转，而版本号一模一样。教训：**用版本号钉住的实测结论不可靠**，
+#   服务端模型/CLI 行为可以在版本号不变的前提下改变；结论必须带**日期**并周期重测。
+#
+# 为何仍然默认关闭（新的、基于证据的理由）：
+#   开它的原本动机是采集精确 usage/cost，但实测信封里
+#   total_cost_usd / input_tokens / output_tokens **全是 0**（本账号不填充），
+#   唯一真正有用的是 stop_reason —— 而它现在可以从 CLI 自己落盘的 session transcript
+#   里读到（见 session-forensics.sh），不需要改动任何 CLI 调用方式、零行为风险。
+#   所以：保持关闭（不引入不必要的行为变更），取证走 transcript。
+#   若将来信封里的 usage 真的非零了，再重新评估是否默认开启。
 # 代价：关闭后没有精确 usage，遥测退化为字节数计量（见下方 AUTOPILOT_TM_*_BYTES）。
-# 仅纯只读的统计场景才值得显式 AUTOPILOT_USAGE_JSON=1 换取精确 usage —— 那种场景不需要写文件。
 USE_QODER_JSON=0
 if [ "$PLATFORM" = qoder ] && [ "${AUTOPILOT_USAGE_JSON:-0}" = 1 ] && command -v jq >/dev/null 2>&1; then
   USE_QODER_JSON=1
@@ -148,12 +238,12 @@ fi
 
 run_worker() {
   if [ -n "$TIMEOUT_BIN" ] && [ "$TIMEOUT" != 0 ]; then
-    "$TIMEOUT_BIN" -k "$KILL_AFTER" "$TIMEOUT" "$@" >"$OUTPUT_FILE" &
+    "$TIMEOUT_BIN" -k "$KILL_AFTER" "$TIMEOUT" "$@" >"$OUTPUT_FILE" 2>"$STDERR_FILE" &
   else
     if [ -z "$TIMEOUT_BIN" ]; then
       echo "WARN: no 'timeout'/'gtimeout' found; running worker without time cap (macOS: brew install coreutils)." >&2
     fi
-    "$@" >"$OUTPUT_FILE" &
+    "$@" >"$OUTPUT_FILE" 2>"$STDERR_FILE" &
   fi
   CHILD_PID=$!
   WORKER_RC=0
@@ -205,8 +295,17 @@ case "$PLATFORM" in
     # low 档 0/4，且 low 档仍给出实质审查（核对 Verify / 安全 / 边界）。因为会变浅，
     # 所以绝不做默认值：第一次尝试保留完整质量，只在已经静默过的重试上降档。
     QODER_ARGS=""
+    # --session-id 把会话钉在我们自己生成的 uuid 上（实测有效：transcript 就落在
+    # $HOME/.qoder/projects/<slug>/<uuid>.jsonl），使失败后的取证变成确定性查找而非猜测。
+    # 必须拼在 --reasoning-effort **之前**：下方的 `--tools default -p` 是一个有意的相邻约束
+    # （--tools 是 variadic，靠紧跟的选项终止取值），而 smoke-dispatch.sh 针对
+    # `--reasoning-effort low --tools default -p` 这段字面相邻关系做了断言；
+    # 把 session-id 插到中间会拆掉它（已实测报错）。新参数一律往前面加。
+    if [ -n "$SESSION_ID" ]; then
+      QODER_ARGS="--session-id $SESSION_ID"
+    fi
     if [ -n "${AUTOPILOT_REASONING_EFFORT:-}" ]; then
-      QODER_ARGS="--reasoning-effort ${AUTOPILOT_REASONING_EFFORT}"
+      QODER_ARGS="$QODER_ARGS --reasoning-effort ${AUTOPILOT_REASONING_EFFORT}"
     fi
     if [ "$USE_QODER_JSON" -eq 1 ]; then
       run_worker qodercli -m "$MODEL" -w "$CWD" --permission-mode bypass_permissions --attachment "$PROMPT_FILE" $QODER_ARGS --tools default -p "$QODER_INSTRUCTION" -o json
@@ -223,6 +322,9 @@ case "$PLATFORM" in
   *) echo "ERROR: Unknown platform '$PLATFORM'. Supported: qoder, claude, codex" >&2; exit 1 ;;
 esac
 
+# worker 的 stderr 原样吐回（保持调用方行为），但字节数已单独记下。
+if [ -s "$STDERR_FILE" ]; then command cat "$STDERR_FILE" >&2 || true; fi
+
 # Clear usage values inherited from a controller; this event describes only
 # this invocation. Always-on metadata is computed from the actual byte streams.
 unset AUTOPILOT_TM_INPUT_TOKENS AUTOPILOT_TM_OUTPUT_TOKENS AUTOPILOT_TM_CACHE_READ_TOKENS
@@ -232,6 +334,9 @@ AUTOPILOT_TM_PROMPT_BYTES="$(wc -c < "$PROMPT_FILE")"
 AUTOPILOT_TM_PROMPT_BYTES="${AUTOPILOT_TM_PROMPT_BYTES//[[:space:]]/}"
 AUTOPILOT_TM_OUTPUT_BYTES="$(wc -c < "$OUTPUT_FILE")"
 AUTOPILOT_TM_OUTPUT_BYTES="${AUTOPILOT_TM_OUTPUT_BYTES//[[:space:]]/}"
+AUTOPILOT_TM_STDERR_BYTES="$(wc -c < "$STDERR_FILE" 2>/dev/null || echo 0)"
+AUTOPILOT_TM_STDERR_BYTES="${AUTOPILOT_TM_STDERR_BYTES//[[:space:]]/}"
+AUTOPILOT_TM_SESSION_ID="$SESSION_ID"
 AUTOPILOT_TM_ATTEMPT="${AUTOPILOT_ATTEMPT:-1}"
 
 json_value() {
@@ -288,21 +393,81 @@ if [ "$STOP_REASON" = tool_use ] && [ "$WORKER_RC" -eq 0 ]; then
 fi
 # 静默收尾：CLI 自认成功（rc=0）却没给出任何锚定结论行。实测成因是模型把整个回合
 # 收在 thinking/redacted_thinking 里、不产出 text 块，CLI 只打印 text 所以 stdout 为空。
-# 它与链路抖动同形但根因完全不同：工具可能已经跑完、文件已落盘。不改 rc（保持 0
+# 它与链路抖动同形但根因完全不同：工具可能已经跑完、文件已落盘。默认不改 rc（保持 0
 # 才会被 classify-outcome 归为 EMPTY；改成非 0 反而会被误归为 TRANSPORT），只把真实成因
 # 写进日志，避免下一个人再拿「掉线」去查网络。此处文案切勿出现行首锚定的结论标记，
 # 也切勿出现 classify-outcome 的 TRANSPORT 关键词，否则会自己污染分类结果。
+# （唯一例外见下方 TRUNCATED_TOOL_USE 分支：它改 rc 为 125，而 125 已被专门归为 TRUNCATED。）
 if [ "$WORKER_RC" -eq 0 ] \
   && command -v tail >/dev/null 2>&1 && command -v grep >/dev/null 2>&1 \
   && [ "$("$SCRIPT_DIR/parse-markers.sh" status "$VERDICT_FILE" 2>/dev/null || echo UNKNOWN)" = UNKNOWN ] \
   && [ "$("$SCRIPT_DIR/parse-markers.sh" review "$VERDICT_FILE" 2>/dev/null || echo UNKNOWN)" = UNKNOWN ]; then
   AUTOPILOT_TM_FAILURE_CLASS=SILENT_COMPLETION
   echo "WARN: SILENT_COMPLETION - worker exited 0 but produced no anchored verdict line." >&2
-  echo "      Typical cause: the model ended its turn inside thinking/redacted_thinking and emitted no text block." >&2
-  echo "      This is NOT a dropped connection: tool calls may already have run and files may already be written." >&2
-  echo "      Inspect the worktree before any retry; a blind retry re-runs the task on an already-modified tree." >&2
+  echo "      stdout=${AUTOPILOT_TM_OUTPUT_BYTES}B stderr=${AUTOPILOT_TM_STDERR_BYTES}B session=${SESSION_ID:-<unknown>}" >&2
+  # 注意：这里也**不**再跑一次 CLI 取版本（已实测的两个坑，勿加回来）：
+  #   ① 它把一个无界外部调用放进流程（对忽略 TERM 的 CLI 会直接拖长整个 dispatch）；
+  #   ② 多出一次 CLI 调用会污染一切「数 CLI 调用次数/参数」的记账与测试
+  #     —— smoke-run-track-a 的降档阶段断言当场被多出的一行顶歪。
+  # 版本直接从 transcript 的 `version` 字段读（零额外进程，而且绑定到出事的那个
+  # 会话本身，比“现在跑一下 --version”更准），由 session-forensics.sh 输出。
+  # 到这一步为止，「为什么没报数」以前只能靠猜，所以旧文案只能写成「可能已经写了文件」。
+  # 现在直接读 CLI 自己的 transcript 定性（已对 3 个真实案例验证），把结论当场打出来
+  # 并写进遥测；它区分的三种情况对「能不能重试」的结论正好相反，不能再含糊过去。
+  #
+  # 取证可能拿不到东西（无 uuidgen / 无 jq / transcript 尚未落盘 / 非 qoder 平台）。
+  # 那种情况必须回退到静态文案，**不能什么都不说** —— 否则这次失败就只剩一行
+  # “no anchored verdict line”，比改之前更难查（已被 smoke-dispatch.sh 当场抓到）。
+  FORENSIC_TEXT=""
+  if [ -n "$SESSION_ID" ] && [ -x "$SCRIPT_DIR/session-forensics.sh" ]; then
+    FORENSIC_JSON="$("$SCRIPT_DIR/session-forensics.sh" --cwd "$CWD" --session-id "$SESSION_ID" --format json 2>/dev/null || true)"
+    if [ -n "$FORENSIC_JSON" ] && command -v jq >/dev/null 2>&1; then
+      AUTOPILOT_TM_FORENSIC_VERDICT="$(printf '%s' "$FORENSIC_JSON" | jq -r '.verdict // ""' 2>/dev/null || true)"
+      AUTOPILOT_TM_STOP_REASON="$(printf '%s' "$FORENSIC_JSON" | jq -r '.stop_reason // ""' 2>/dev/null || true)"
+      AUTOPILOT_TM_TOOL_CALLS="$(printf '%s' "$FORENSIC_JSON" | jq -r '.tool_calls // ""' 2>/dev/null || true)"
+    fi
+    FORENSIC_TEXT="$("$SCRIPT_DIR/session-forensics.sh" --cwd "$CWD" --session-id "$SESSION_ID" 2>/dev/null || true)"
+  fi
+  if [ -n "$FORENSIC_TEXT" ]; then
+    printf '%s\n' "$FORENSIC_TEXT" | sed 's/^/      /' >&2
+  else
+    echo "      Typical cause: the model ended its turn inside thinking/redacted_thinking and emitted no text block." >&2
+    echo "      This is NOT a dropped connection: tool calls may already have run and files may already be written." >&2
+    echo "      Inspect the worktree before any retry; a blind retry re-runs the task on an already-modified tree." >&2
+  fi
+  # 取证一旦明确定为「工具调用被截断」，就不能再让它走 EMPTY 的静默重试路径。
+  # 关键在于两类静默的**统计性质完全不同**，所以不能共用一套重试策略：
+  #   THINKING_ONLY——随机的。实测同一 review prompt：Ultimate 8/15 静默，即重试约
+  #     有一半概率开口；降 effort / 换模型还能进一步推高。重试阶梯是划得来的。
+  #   TRUNCATED_TOOL_USE——确定性的。两份独立证据：上方注释记的「原样重试 3 次全部
+  #     复现」；以及真实遇到的每日分析 agent（2026-08-17，3 次尝试分别只产出
+  #     87B/115B/118B，报告一次没落盘）。重试只是把同一次注定失败的调用按全价
+  #     买到 AUTOPILOT_SILENT_RETRIES（默认 5）遍。系统已经知道答案，不能丢掉。
+  #
+  # 为何这是上面那句「不改 rc」的**定向例外**而不是违背它：那句担心的是被误归为
+  # TRANSPORT（会退避重试），而现在 125 + 下面这行锚定文案已被 classify-outcome 专门
+  # 识别为 TRUNCATED、直接 fail-closed。也正因如此，判据必须是 rc（由本脚本设置），
+  # 不能只凭日志里出现这个字符串 —— 本仓源码自己就含该词，worker 在本仓干活时
+  # 完全可能把它打进日志，按文本匹配就会把一次正常的开发误判成截断。
+  #
+  # 安全前提：session-forensics.sh 的判据顺序把「动过盘」排在 TRUNCATED_TOOL_USE 之前，
+  # 所以走到这里时工作树一定未被修改，直接停机不会丢弃任何已完成的成果。
+  #
+  # 遗留不确定性（所以留了开关）：上述「确定性」测的是**原样**重试；而静默阶梯在
+  # 第 2 次降 effort、第 3 次换模型，那两根杠杆对「截断」究竟有没用没有受控实测。
+  # 若以后发现停得太死，设 AUTOPILOT_TRUNCATED_FAIL_CLOSED=0 即可退回旧的 EMPTY 重试行为。
+  if [ "${AUTOPILOT_TM_FORENSIC_VERDICT:-}" = TRUNCATED_TOOL_USE ] \
+    && [ "${AUTOPILOT_TRUNCATED_FAIL_CLOSED:-1}" = 1 ]; then
+    AUTOPILOT_TM_FAILURE_CLASS=TRUNCATED_TOOL_USE
+    WORKER_RC=125
+    echo "ERROR: TRUNCATED_TOOL_USE - the model emitted a tool call the CLI never executed (worktree untouched)." >&2
+    echo "       Not retryable: an identical retry reproduces it. Remove the cause, then rerun." >&2
+    echo "       Set AUTOPILOT_TRUNCATED_FAIL_CLOSED=0 to fall back to the old silent-retry ladder." >&2
+  fi
 fi
 export AUTOPILOT_TM_PROMPT_BYTES AUTOPILOT_TM_OUTPUT_BYTES AUTOPILOT_TM_ATTEMPT
+export AUTOPILOT_TM_STDERR_BYTES AUTOPILOT_TM_SESSION_ID
+export AUTOPILOT_TM_FORENSIC_VERDICT AUTOPILOT_TM_STOP_REASON AUTOPILOT_TM_TOOL_CALLS 2>/dev/null || true
 export AUTOPILOT_TM_INPUT_TOKENS AUTOPILOT_TM_OUTPUT_TOKENS AUTOPILOT_TM_CACHE_READ_TOKENS 2>/dev/null || true
 export AUTOPILOT_TM_COST_USD AUTOPILOT_TM_CONTEXT_RATIO AUTOPILOT_TM_NUM_TURNS AUTOPILOT_TM_API_MS AUTOPILOT_TM_IS_ERROR AUTOPILOT_TM_FAILURE_CLASS 2>/dev/null || true
 telemetry_emit_dispatch "$WORKER_RC" "$START" || true

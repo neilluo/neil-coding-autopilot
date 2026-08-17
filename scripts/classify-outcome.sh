@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# WHAT: Classify a worker exit code and log as OK, TRANSPORT, TIMEOUT, EMPTY, or APP.
+# WHAT: Classify a worker exit code and log as OK, TRANSPORT, TIMEOUT, TRUNCATED, EMPTY, or APP.
 # USAGE: classify-outcome.sh <exit_code> <log_file>
 # EXIT CODES: Always 0 for classification requests; help also exits 0.
 set -euo pipefail
@@ -28,6 +28,25 @@ case "$exit_code" in
   124|137)
     printf '%s\n' TIMEOUT
     exit 0
+    ;;
+esac
+
+# 1b) TRUNCATED —— dispatch.sh 用 125 标记「模型发出了工具调用但 CLI 没执行就退出，文件零改动」。
+# 它**必须**与 TRANSPORT 分开：dispatch.sh 自己写着实测结论「原样重试 3 次全部复现，`-r` 续跑
+# 同样救不回（会话已被悬空的 tool_use 污染）」，而 TRANSPORT 会被上层退避重试到耗尽 ——
+# 等于把一次注定失败的调用按全价买三遍，还白等 5+10+20=35s。分出独立类别后由上层直接
+# fail-closed，把浪费从 3 次调用压到 1 次。
+#
+# 只认「125 + dispatch 打出的锚定行」这一对组合，不单看退出码：`timeout(1)` 也用 125 表示
+# 自身启动失败，单看码会把那种情况误标成截断。锚定判据是本仓一贯做法（见 parse-markers.sh）。
+# 锚定行拿得到是有保证的：run-track-a.sh 的 dispatch_worker 用 `2>&1 | tee` 收日志，
+# dispatch.sh 那句 ERROR 走 stderr 也会落进同一个文件。
+case "$exit_code" in
+  125)
+    if [ -f "$log_file" ] && grep -q 'TRUNCATED_TOOL_USE' "$log_file" 2>/dev/null; then
+      printf '%s\n' TRUNCATED
+      exit 0
+    fi
     ;;
 esac
 

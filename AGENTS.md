@@ -47,9 +47,10 @@ implement(worker-cli) → verify(编译) → review(reviewer-cli) → fix(worker
 | `AUTOPILOT_SILENT_EFFORT` | low | 静默后的重试降低 `--reasoning-effort` 到此档位（直接打击“回合死在 thinking 里”；实测同 prompt 默认档 1/4 静默 vs low 档 0/4）。**首次尝试不降档**以保质量；设空字符串关闭 |
 | `AUTOPILOT_SILENT_FALLBACK_MODEL` | Performance | 连续静默达 `AUTOPILOT_SILENT_SWITCH_AFTER` 次后换成该模型跑完剩余尝试；设空字符串关闭 |
 | `AUTOPILOT_SILENT_SWITCH_AFTER` | 2 | 静默几次后开始换模型（保证默认模型先被充分尝试） |
+| `AUTOPILOT_TRUNCATED_FAIL_CLOSED` | 1 | 取证判定为 `TRUNCATED_TOOL_USE`（模型发出工具调用、CLI 没执行就退出，工作树零改动）时**立即 fail-closed，不重试**。设 0 退回旧的 EMPTY 静默重试。**默认 1 是省钱决定**：两类静默的统计性质相反 —— thinking-only 是随机的（实测 Ultimate 8/15 静默，重试约一半概率开口，重试阶梯划得来），而截断是确定性的（`dispatch.sh` 实测原样重试 3/3 复现；真实每日分析 agent 3 次尝试只产出 87B/115B/118B、报告一次没落盘）。旧行为把一次注定失败的调用按全价买到 `AUTOPILOT_SILENT_RETRIES`（默认 5）遍 |
 | `AUTOPILOT_FINISH_MODE` | deterministic | finish 阶段执行方式；设 `worker` 退回旧的 agent 路径（需要 SKILL.md 里的 PR/CI 语义时）。实测 agent 路径 finish 7/7 未给结论，故默认确定性 |
 | `AUTOPILOT_RETRY_BACKOFF_S` | 5 | 传输重试指数退避基数秒数（5/10/20）；**只作用于 TRANSPORT**，静默不退避 |
-| `AUTOPILOT_USAGE_JSON` | 0 | 设 1 才启用 `qodercli -o json` usage 信封。**默认关闭是功能性约束**：带 `-o json` 时 headless 工具循环会停在首个 tool_use、工具根本不执行（实测 0/5 成功）。仅纯只读统计场景才值得开 |
+| `AUTOPILOT_USAGE_JSON` | 0 | 设 1 才启用 `qodercli -o json` usage 信封。**注意历史结论已于 2026-08-17 被推翻**：旧注释称 `-o json` 会让工具循环停在首个 tool_use（0/5 成功），重测（同一版本号 1.0.16、每变体 11 次）为 `-o json` 11/11、`-o text` 10/11、不带 `-o` 9/11。仍默认关闭的新理由：信封里 `total_cost_usd`/`input_tokens`/`output_tokens` **全为 0**，唯一有用的 `stop_reason` 已可由 `session-forensics.sh` 从 transcript 读到，零行为风险。**教训：用版本号钉住的实测结论不可靠，结论必须带日期并周期重测** |
 | `AUTOPILOT_RAW_JSON` | （未设置） | 可选：把 qodercli 原始 JSON 信封复制到指定路径 |
 | `AUTOPILOT_REVIEW_DIFF_BUDGET` | 120000 | reviewer 上下文最大字节数，超限显式标记 `TRUNCATED` |
 | `AUTOPILOT_EMPTY_LOG_BYTES` | 300 | worker 短日志判为 EMPTY / TRANSPORT 的字节阈值 |
@@ -62,7 +63,11 @@ implement(worker-cli) → verify(编译) → review(reviewer-cli) → fix(worker
 | AUTOPILOT_DAILY_MODEL | Ultimate | 每日 analysis agent 模型 |
 | `AUTOPILOT_DAILY_RETRIES` | 3 | 每日 analysis agent 最大尝试次数；以「reports/<date>.md 是否落盘」为退出条件，成功即停 |
 
-超时取值以 `scripts/dispatch.sh` 为准，优先级为：CLI `--timeout` > `AUTOPILOT_TIMEOUT_<STAGE>` > `AUTOPILOT_TIMEOUT` > 内置阶段默认值；任一来源设为 `0` 表示不启用 timeout 包装。
+超时取值以 `scripts/dispatch.sh` 为准，优先级为：CLI `--timeout` > `AUTOPILOT_TIMEOUT_<STAGE>` > `AUTOPILOT_TIMEOUT` > 内置阶段默认值；任一来源设为 `0` 表示不启用 timeout 包装。**但全局 `AUTOPILOT_TIMEOUT` 只能收紧、不能放大**：当它高于某阶段内置默认时会被夹回该默认（放大某阶段必须用分阶段旋钮或 `--timeout`）。
+
+**超时窗口就是烧钱窗口（全局 `AUTOPILOT_TIMEOUT` 只收紧不放大）**：worker 被杀之前已生成的 token 照付，而 TIMEOUT 在 `run-track-a.sh` 里是 fail-closed、**不重试**，成果整个丢弃 —— 所以超时上限等于「一个卡死的 worker 最多能烧多少钱」。一个笼统的全局 `AUTOPILOT_TIMEOUT` 若高于某阶段各自调好的默认值（review/fix 900、非 implement 600），会把这些便宜阶段的烧钱窗口拉宽 2~3 倍。已实测踩到：shell profile 里一行 `export AUTOPILOT_TIMEOUT=1800` 就把所有阶段抬到 1800s。现在 dispatch 在这种情况下会把值**夹回阶段内置默认**并打一条 `WARN`（头部同时输出 `timeout-src=<来源>`；调小不夹也不告警 —— 那是主动收紧预算）。**效果：即使 `~/.zshrc` 里残留着全局 1800，也已无害（每阶段自动回到自己的默认）。** 要真的放大某阶段，用 `AUTOPILOT_TIMEOUT_<STAGE>`。
+
+**成本目前不可观测（已核实）**：`runs/*.jsonl` 里 `input_tokens`/`output_tokens`/`cost_usd` 字段存在但永远为空——`-o json` 信封里这三个值本身全是 0，而 CLI 的 session transcript **根本没有** `usage` 字段（已逐字段验证）。因此只有 `duration_s` / `prompt_bytes` / `output_bytes` 三个代理指标可用；任何「省了多少钱」的结论只能基于这三个代理量或平台账单，**不得声称精确 token 数**。
 
 **统一调度约定**:
 ```bash
@@ -80,7 +85,9 @@ $AGENT_DISPATCH --model "MODEL" --cwd "$PROJECT_ROOT" \
 | 脚本 | 职责 |
 |------|------|
 | `scripts/telemetry.sh` | 可 source 的遥测 lib：emit/rotate/log_root，写侧零依赖、fail-safe（绝不污染 stdout / 不改 exit code） |
-| `scripts/classify-outcome.sh` | 按退出码、锚定标记与日志大小分类 `OK/TRANSPORT/TIMEOUT/EMPTY/APP`，供有界重试决策使用 |
+| `scripts/session-forensics.sh` | **静默 worker 取证**：读 CLI 自己落盘的 session transcript（`~/.qoder/projects/<物理cwd 的/换成->/<session-id>.jsonl`），定性为 `REPORTED` / `WORK_DONE_UNREPORTED` / `TRUNCATED_TOOL_USE` / `THINKING_ONLY`，并给出 cli_version。这四种对「能不能重试」的结论**互相矛盾**，是重试决策的唯一可靠判据 |
+| `scripts/record-subagent.sh` | **subagent 通道记账**：主控会话内用 subagent 开发时，开发不经 dispatch.sh，遥测会整段缺失（实测：一个 9h37min / 13128 credits 的整夜在 runs/ 里一行都没有）。用 `start/end/round/task` 四个子命令按同一 schema 写进同一个 runs/*.jsonl，靠 `channel` 字段区分 cli / subagent |
+| `scripts/classify-outcome.sh` | 按退出码、锚定标记与日志大小分类 `OK/TRANSPORT/TIMEOUT/TRUNCATED/EMPTY/APP`，供有界重试决策使用。`TRUNCATED` 判据是 **rc=125 + 日志含 `TRUNCATED_TOOL_USE` 锚定行**这一对组合：`timeout(1)` 也用 125 表示自身启动失败，而本仓源码自己就含该字符串（worker 在本仓干活时可能把它打进日志），所以两者都不能单独作为判据 |
 | `scripts/parse-markers.sh` | 锚定式解析结论标记（`**Status:**` / `XXX_STATUS=` / `REVIEW_PASS|FAIL`，容列表符与反引号），是「worker 报没报数」的单一判据 |
 | `scripts/finish-change.sh` | **确定性 finish**（C10）：全 Task DONE + 工作树清洁两道门禁 → 探测基分支合并（冲突即 abort 并还原）→ 归档（XOR）→ 提交 → 清哨兵。merge 路径上不再有 LLM |
 | `scripts/review-context.sh` | 生成预算受限的 review diff，上下文超限时保留文件概览并标记 `TRUNCATED` |
@@ -90,6 +97,34 @@ $AGENT_DISPATCH --model "MODEL" --cwd "$PROJECT_ROOT" \
 | `scripts/install-daily-schedule.sh` | 生成/加载每日 13:00 定时任务；**插件改动后必须重跑本脚本**（`--stage-scripts` 把脚本副本放到 TCC 安全目录，副本不会自动跟随仓库更新）。用 `--check-staged` 只读检测副本是否落后（一致 exit 0 / 落后 exit 3 并点名文件） |
 
 系统只产出**建议**（reports/，针对插件自身角色 prompt），改不改永远人工批准，绝不自动改自己。
+
+### 铁律：脚本只有一份事实源（2026-08-16 事故）
+
+业务仓库里曾出现一份手工拷出的编排器副本 `<project>/.autopilot-local/scripts/`（8-15 拷贝），
+它**缺** `worktree_signature` 指纹守卫、**缺** EMPTY/静默分支、**缺** `SILENT_COMPLETION` 诊断，
+于是把「worker 干完活但没报数」一律标成 `transport failure`、丢弃已落盘的成果并重试到 Task BLOCKED。
+当晚 9 次真实 run 无一例外；而插件仓库那份代码本身是正确的（用桩可复现它正确判定为 silent 并拒绝重试）。
+后果被放大到了策略层：据此得出「headless 只有 ~50% 成功率、不可用」的错误结论，转向 in-session
+subagent 开发，把编码工作从 Performance 抬到 Ultimate 计费 —— 一夜 13128 credits。
+
+三条硬约束：
+
+1. **不要在业务仓库里放编排器脚本副本。** 一律引用插件仓库路径（或 `AGENT_DISPATCH` 指向它）。
+2. `run-track-a.sh` / `dispatch.sh` 启动时会打印**正在执行的脚本绝对路径**（`driver: script=…` /
+   `dispatch: script=…`）。排查任何异常行为，**先看这一行**再看别的。
+3. `install-daily-schedule.sh --stage-scripts` 生成的 staged 副本同样会漂移；
+   用 `--check-staged` 定期核对（一致 exit 0 / 落后 exit 3 并点名文件）。
+
+### 遥测新增字段（取证用）
+
+| 字段 | 含义 |
+|------|------|
+| `session_id` | dispatch 自己生成并用 `--session-id` 钉住的会话 id；凭它可直接定位 transcript 做取证 |
+| `stderr_bytes` | 与 `output_bytes` 分开记；两股流合并后「CLI 一个字没说」与「我们把 stderr 丢了」长得一样 |
+| `forensic_verdict` | `session-forensics.sh` 的定性结论（见上表）；区分「重试安全」与「重试会叠在半成品上」 |
+| `stop_reason` | 回合收尾方式（`end_turn` / `tool_use`）；`tool_use` + 零改动 = 工具调用被截断 |
+| `tool_calls` | 该会话实际发出的工具调用次数；`0` 意味着模型什么都没做 |
+| `channel` | `cli`（headless worker 进程，单独计费、fresh context）/ `subagent`（主控会话内，计费归主控、共享上下文） |
 
 ## Skills 清单
 

@@ -62,6 +62,14 @@ assert_classification "substantive success" 0 "$WORK/ok.log" OK
 assert_classification "exit 124 timeout" 124 "$WORK/transport.log" TIMEOUT
 assert_classification "exit 137 timeout" 137 "$WORK/missing-timeout.log" TIMEOUT
 
+# 125 = 工具调用被截断（dispatch.sh 设的）。必须与 TRANSPORT 分开：它不可重试（实测原样
+# 重试 3 次全部复现），而 TRANSPORT 会被上层退避重试到耗尽 —— 等于把一次注定失败的
+# 调用按全价买三遍。两个断言成对：光有退出码不够，`timeout(1)` 也用 125 表示自身启动失败，
+# 那种情况不能被当成截断（否则真的环境问题会拿到一段误导的 hint）。
+printf 'ERROR: TRUNCATED_TOOL_USE - worker stopped at a tool call without executing it (no files changed).\n' > "$WORK/truncated.log"
+assert_classification "exit 125 with truncation anchor" 125 "$WORK/truncated.log" TRUNCATED
+assert_classification "exit 125 without anchor stays transport" 125 "$WORK/transport.log" TRANSPORT
+
 # New cases (D18/D19 anchor-parse rules)
 
 # Case 1: exit 1 + >300B body with "Unable to connect" text + REVIEW_FAIL marker → APP (not TRANSPORT)

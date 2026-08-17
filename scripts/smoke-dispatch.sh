@@ -76,6 +76,24 @@ check_timeout() {
 check_timeout 'stage default' 900 AUTOPILOT_STAGE=review
 check_timeout 'global timeout' 41 AUTOPILOT_STAGE=review AUTOPILOT_TIMEOUT=41
 check_timeout 'stage timeout' 42 AUTOPILOT_STAGE=review AUTOPILOT_TIMEOUT=41 AUTOPILOT_TIMEOUT_REVIEW=42
+# 超时窗口就是「一个卡死的 worker 最多能烧多少钱」，所以「是谁定的这个上限」必须在日志里可见。
+assert_contains "$(<"$ROOT/err")" 'timeout-src=AUTOPILOT_TIMEOUT_REVIEW' 'timeout source is logged'
+
+# 全局 AUTOPILOT_TIMEOUT 高于阶段内置默认时必须被**夹回默认**（只能收紧不能放大）：
+# 超时窗口 = 卡死 worker 的烧钱上限，成果超时即丢弃。已实测 shell profile 一行
+# `export AUTOPILOT_TIMEOUT=1800` 把所有阶段抬到 1800s。夹取后 review 应回到 900s，并打出可操作提示。
+run_capture "$ROOT/out" "$ROOT/err" env -u AUTOPILOT_TIMEOUT_REVIEW PATH="$BIN:$PATH" AUTOPILOT_PLATFORM=qoder AUTOPILOT_STAGE=review AUTOPILOT_TIMEOUT=1800 bash "$DISPATCH" --model TestModel --cwd "$ROOT" --prompt-file "$ROOT/prompt.md" --instruction x
+assert_contains "$(<"$ROOT/err")" 'stage=review timeout=900s' 'inflating global timeout is clamped to stage default'
+assert_contains "$(<"$ROOT/err")" 'clamped to 900s' 'clamp is announced on stderr'
+assert_contains "$(<"$ROOT/err")" 'AUTOPILOT_TIMEOUT_REVIEW' 'clamp names the per-stage knob to raise it'
+# 反面：全局值比阶段默认更**小**时是主动收紧预算，必须原样保留、不夹、不告警。
+run_capture "$ROOT/out" "$ROOT/err" env -u AUTOPILOT_TIMEOUT_REVIEW PATH="$BIN:$PATH" AUTOPILOT_PLATFORM=qoder AUTOPILOT_STAGE=review AUTOPILOT_TIMEOUT=60 bash "$DISPATCH" --model TestModel --cwd "$ROOT" --prompt-file "$ROOT/prompt.md" --instruction x
+assert_contains "$(<"$ROOT/err")" 'stage=review timeout=60s' 'tightening global timeout is preserved'
+if grep -q 'clamped to' "$ROOT/err"; then
+  fail 'tightened global timeout is not clamped'
+else
+  pass 'tightened global timeout is not clamped'
+fi
 run_capture "$ROOT/out" "$ROOT/err" env PATH="$BIN:$PATH" AUTOPILOT_PLATFORM=qoder AUTOPILOT_STAGE=review AUTOPILOT_TIMEOUT=41 AUTOPILOT_TIMEOUT_REVIEW=42 bash "$DISPATCH" --model TestModel --cwd "$ROOT" --prompt-file "$ROOT/prompt.md" --instruction x --timeout 43
 assert_contains "$(<"$ROOT/err")" 'stage=review timeout=43s kill-after=30s model=TestModel' 'CLI timeout wins'
 # Dynamic stage names must not execute or break indirect lookup.
