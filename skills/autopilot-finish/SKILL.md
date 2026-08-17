@@ -99,19 +99,11 @@ gh run list --limit 1
 
 **不变量**：完成后该变更在 `archive` **XOR** `changes` 中，绝不两处并存（原 `cp` 手法只复制不清理、导致两处并存，是本步要修复的根因缺陷）。
 
-脚本自身用相对 `scripts/` 不可靠（本 skill 运行在业务项目 CWD 下，`scripts/` 会解析到业务项目、不存在）；按 `_shared/conventions.md`「dispatch.sh 路径解析」同款范式解析出绝对路径：
+脚本自身用相对 `scripts/` 不可靠（本 skill 运行在业务项目 CWD 下，`scripts/` 会解析到业务项目、不存在）；按 `_shared/conventions.md`「托管脚本路径」的唯一写法直接用绝对路径：
 
 ```bash
-export SKILL_BASE_DIR="<注入的 Base directory for this skill 绝对路径>"
-resolve_script() {
-  local name="$1"
-  local base="${SKILL_BASE_DIR:-}" root="${SKILL_BASE_DIR:-}"; root="${root%/skills/*}"
-  [ -n "${base}" ] && [ -f "${root}/scripts/${name}" ] && { printf '%s\n' "${root}/scripts/${name}"; return 0; }
-  local cand="${HOME}/.qoder/skills/neil-coding-autopilot/scripts/${name}"
-  [ -f "${cand}" ] && { printf '%s\n' "${cand}"; return 0; }
-  echo "ERROR: ${name} not found — cannot archive" >&2; return 1
-}
-ARCHIVE_CHANGE="$(resolve_script archive-change.sh)" || { echo "FINISH_STATUS=BLOCKED: 定位不到 archive-change.sh"; exit 1; }
+ARCHIVE_CHANGE="$HOME/.qoder/skills/neil-coding-autopilot/scripts/archive-change.sh"
+[ -f "$ARCHIVE_CHANGE" ] || { echo "FINISH_STATUS=BLOCKED: 定位不到 archive-change.sh"; exit 1; }
 
 if ! "$ARCHIVE_CHANGE" --change-dir "$CHANGE_DIR"; then
   echo "FINISH_STATUS=BLOCKED: archive-change.sh 调用失败"

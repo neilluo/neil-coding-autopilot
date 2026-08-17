@@ -85,10 +85,10 @@ cat $KNOWLEDGE_DIR/SCHEMA.md 2>/dev/null || echo "No SCHEMA yet"
 cat $KNOWLEDGE_DIR/wiki/index.md 2>/dev/null || echo "No wiki index yet"
 ```
 
-**历史经验检索**：用需求关键词调用 `scripts/kb-search.sh`（脚本自身用相对 `scripts/` 不可靠，按 `_shared/conventions.md`「dispatch.sh 路径解析」同款范式解析出绝对路径 `$KB_SEARCH`），检索本地 + 全局历史经验：
+**历史经验检索**：用需求关键词调用 kb-search.sh（绝对路径，唯一写法见 `_shared/conventions.md`「托管脚本路径」），检索本地 + 全局历史经验：
 
 ```bash
-"$KB_SEARCH" --query "<需求关键词>" --cwd "$PROJECT_ROOT"
+"$HOME/.qoder/skills/neil-coding-autopilot/scripts/kb-search.sh" --query "<需求关键词>" --cwd "$PROJECT_ROOT"
 ```
 
 命中结果写入 explore-notes.md 的「## 历史经验命中」段；**无命中（脚本输出 `(no prior-art hits)`）也必须写该段并注明"无命中"**，不得省略此段。

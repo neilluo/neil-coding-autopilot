@@ -110,20 +110,11 @@ evidence: primary
 
 对 Step 2/3 中判定为**跨项目通用**（不依赖本项目具体技术栈/业务逻辑，例如流程模式、工具设计原则、通用踩坑）的经验，额外写一份到全局 KB；**项目特定经验只留本地 `$KNOWLEDGE_DIR/raw/`，不做此步**。
 
-脚本自身用相对 `scripts/` 不可靠（本 skill 运行在业务项目 CWD 下），按 `_shared/conventions.md`「dispatch.sh 路径解析」同款范式解析出绝对路径：
+脚本自身用相对 `scripts/` 不可靠（本 skill 运行在业务项目 CWD 下），按 `_shared/conventions.md`「托管脚本路径」的唯一写法直接用绝对路径：
 
 ```bash
-export SKILL_BASE_DIR="<注入的 Base directory for this skill 绝对路径>"
-resolve_script() {
-  local name="$1"
-  local base="${SKILL_BASE_DIR:-}" root="${SKILL_BASE_DIR:-}"; root="${root%/skills/*}"
-  [ -n "${base}" ] && [ -f "${root}/scripts/${name}" ] && { printf '%s\n' "${root}/scripts/${name}"; return 0; }
-  local cand="${HOME}/.qoder/skills/neil-coding-autopilot/scripts/${name}"
-  [ -f "${cand}" ] && { printf '%s\n' "${cand}"; return 0; }
-  echo "ERROR: ${name} not found" >&2; return 1
-}
-KB_PATH="$(resolve_script kb-path.sh)"
-if [ -n "$KB_PATH" ]; then
+KB_PATH="$HOME/.qoder/skills/neil-coding-autopilot/scripts/kb-path.sh"
+if [ -f "$KB_PATH" ]; then
   GLOBAL_KB="$("$KB_PATH" --ensure)"
 else
   echo "跳过全局升迁：定位不到 kb-path.sh"

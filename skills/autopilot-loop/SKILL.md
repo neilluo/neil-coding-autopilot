@@ -129,9 +129,11 @@ digraph loop {
 
 ```bash
 # 控制器进 loop 前：确保 tasks.md 就绪（小 spec 可 1 Task，见 autopilot-plan）
-RUNNER="$(dirname "$DISPATCH")/run-track-a.sh"   # 与 dispatch.sh 同目录（$DISPATCH 解析见 conventions）
-bash "$RUNNER" --change-dir "$CHANGE_DIR" --cwd "$PROJECT_ROOT"   # --dry-run 先看计划
+bash "$HOME/.qoder/skills/neil-coding-autopilot/scripts/run-track-a.sh" \
+  --change-dir "$CHANGE_DIR" --cwd "$PROJECT_ROOT"   # --dry-run 先看计划
 ```
+
+路径照抄上面这一条（唯一写法见 `_shared/conventions.md`）；**定位不到就报错停下，绝不改用 subagent / 内联写码代替托管。**
 
 - 脚本逐 Task 跑 implement→verify→review→fix→commit（每步 fresh qodercli），fail-closed（退出码 0=全 DONE / 2=BLOCKED）。
 - 控制器**不读源文件、不写代码、不看 diff**——开发细节全在 worker 的独立 context。

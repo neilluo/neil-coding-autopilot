@@ -53,13 +53,14 @@ AI 全托管开发编排器。从需求到部署的全自动开发流水线。
 
 ```bash
 # 从业务项目根启动；控制器(档位 B 交互) 或终端(档位 A 无人值守) 都用这一条
-RUNNER="$(dirname "$DISPATCH")/run-track-a.sh"   # 与 dispatch.sh 同目录（$DISPATCH 解析见 conventions）
-bash "$RUNNER" --change-dir autopilot/changes/<feature> --cwd "$PROJECT_ROOT"
+bash "$HOME/.qoder/skills/neil-coding-autopilot/scripts/run-track-a.sh" \
+  --change-dir autopilot/changes/<feature> --cwd "$PROJECT_ROOT"
 # --dry-run 先看计划(不烧 token)；--resume 断点续跑；--max-rounds N 控 CR 轮数
 ```
 
+**路径照抄这条；定位不到就报错停下，绝不改用 subagent / 内联写码代替托管。**
+
 - **控制器（档位 B）**：会话内 `bash run-track-a.sh ...`，只看 driver 日志摘要、不碰开发细节；跑完在会话内继续 finish/evolve。
-- 别用"起一个 qodercli 当编排器、让它自己读 SKILL 循环"——那把 context-rot 搬到编排器、非确定、难调试（调研见 `autopilot/knowledge/wiki/guides/track-a-launcher-pattern.md`）。
 - **前置**：`run-track-a.sh` 依赖同目录 dispatch.sh / parse-status.sh / task-state.sh；超时依赖 `timeout`/`gtimeout`（macOS 需 `brew install coreutils`，缺失自动降级）。跑前先 `bash scripts/smoke-dispatch.sh` + `bash scripts/smoke-run-track-a.sh` 冒烟自检（不烧 token）。
 - **`run-track-a.sh` 仍是纯 loop-only 托管入口**（只跑开发内循环）；`scripts/run-autopilot.sh` 是档位 A 的端到端编排器，链式跑完 loop（`run-track-a.sh`）→ finish → evolve 三阶段（fail-closed，任一阶段 BLOCKED 即停不接力）。跑前可先 `bash scripts/smoke-run-autopilot.sh` 冒烟自检（不烧 token）。
 

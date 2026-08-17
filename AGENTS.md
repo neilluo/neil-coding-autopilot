@@ -31,7 +31,7 @@ implement(worker-cli) → verify(编译) → review(reviewer-cli) → fix(worker
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | AUTOPILOT_PLATFORM | auto | qoder / claude / codex / auto(自动检测，优先级 qoder>claude>codex) |
-| AGENT_DISPATCH | (解析到 plugin 自带绝对路径) | 统一调度脚本；留空则按 `conventions.md`「dispatch.sh 路径解析」推导绝对路径，可设为绝对路径显式覆盖（勿用相对 `scripts/dispatch.sh`） |
+| AGENT_DISPATCH | `~/.qoder/skills/neil-coding-autopilot/scripts/dispatch.sh` | 统一调度脚本；留空即用左边这个默认绝对路径（唯一写法见 `conventions.md`「托管脚本路径」），非标准安装才设为绝对路径覆盖（勿用相对 `scripts/dispatch.sh`，也勿去业务仓库找 `.autopilot-local/scripts/`） |
 | AUTOPILOT_ANALYZE_MODEL | Ultimate | 需求分析阶段模型（需强推理） |
 | AUTOPILOT_PLAN_MODEL | Ultimate | Task 拆解阶段模型（需强推理） |
 | AUTOPILOT_IMPLEMENTER_MODEL | Performance | 编码型 worker 模型 |

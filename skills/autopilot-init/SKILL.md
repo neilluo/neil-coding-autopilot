@@ -94,7 +94,7 @@ which qodercli >/dev/null 2>&1 && echo "qodercli: OK" || echo "qodercli: MISSING
 # ② 超时二进制（dispatch.sh 需要；macOS 默认无，缺失则 dispatch.sh 自动降级无超时）
 { command -v timeout || command -v gtimeout; } >/dev/null 2>&1 \
   && echo "timeout: OK" || echo "timeout: MISSING (macOS: brew install coreutils)"
-# ③ 解析 plugin 自带 dispatch.sh（见 _shared/conventions.md「dispatch.sh 路径解析」）
+# ③ plugin 自带 dispatch.sh 的绝对路径（见 _shared/conventions.md「托管脚本路径」）
 DISPATCH="${AGENT_DISPATCH:-$HOME/.qoder/skills/neil-coding-autopilot/scripts/dispatch.sh}"
 [ -f "$DISPATCH" ] && echo "dispatch.sh: $DISPATCH" || echo "dispatch.sh: NOT FOUND → 只能档位 B"
 # ④ token-free 冒烟（stub 三平台，不烧 token；仅在 ①③ 均 OK 时有意义）
