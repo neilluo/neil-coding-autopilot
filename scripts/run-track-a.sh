@@ -458,12 +458,14 @@ fail_closed_stop() {
       ;;
     TRUNCATED)
       # 工具调用被截断：模型发出了 tool_use、CLI 没执行就退出，文件零改动。
-      # 这里绝不重试（dispatch.sh 实测：原样重试 3 次全部复现）——重试只是把同一次
-      # 注定失败的调用按全价再买两遍。唯一出路是消除诱因后重开 fresh session。
+      # 走到这一步说明**换参重试也没救回来**：dispatch_with_retry 的 TRUNCATED 分支
+      # 已降过 effort / 回落过模型（而原样重试则实测 3/3 复现）。剩下的出路是消除诱因。
       log "  → stop (fail-closed, truncated tool call — nothing was executed)"
-      echo "hint: NOT a transport failure and NOT retryable — the model emitted a tool call the CLI never ran."
-      echo "      Nothing was written. Retrying the same prompt reproduces it; fix the cause instead:"
-      echo "      unset AUTOPILOT_USAGE_JSON, forbid preamble text in the prompt, or shrink this task, then --resume."
+      echo "hint: NOT a transport failure — the model emitted a tool call the CLI never ran, and the"
+      echo "      changed-input retry (lower reasoning effort / fallback model) did not help either."
+      echo "      Nothing was written, so rerunning with --resume is safe. Remove the cause first:"
+      echo "      for text-only stages forbid tool use and inline the context; otherwise shrink this task."
+      echo "      Set AUTOPILOT_TRUNCATED_RETRIES=0 to fail closed immediately without the retry."
       ;;
     *)
       log "  → stop (fail-closed, transport)"
@@ -485,6 +487,9 @@ dispatch_with_retry() {
   # 静默降档：空 = 不传 --reasoning-effort（保留默认完整推理）。只在已经静默过之后才降，
   # 因为降档会让审查/实现变浅；但总比“一字不发”好。设 AUTOPILOT_SILENT_EFFORT="" 可关闭。
   local silent_effort="${AUTOPILOT_SILENT_EFFORT-low}" effort=""
+  # TRUNCATED（工具调用被截断、工作树零改动）允许的**换参**重试次数。设 0 退回
+  # 旧行为（一次不试、直接 fail-closed）。为何默认给 1 见下方 TRUNCATED 分支的注释。
+  local trunc_attempts="${AUTOPILOT_TRUNCATED_RETRIES:-1}" trunc_used=0 input_changed
 
   [ "$max_attempts" -gt 0 ] || max_attempts=1
   [ "$silent_attempts" -gt 0 ] || silent_attempts=1
@@ -555,6 +560,47 @@ dispatch_with_retry() {
         fi
         log "  transport failure (attempt $attempt/$max_attempts) → exhausted"
         ;;
+      TRUNCATED)
+        # 先校工作树指纹：万一真动过盘，就和 SILENT 同样处理 —— 绝不能叠在它
+        # 自己的改动上重试。（dispatch 侧的判据顺序使这里通常是零改动，但指纹才是
+        # 地面真相，仍须当场校一次。）
+        sig_after="$(worktree_signature)"
+        if [ "$sig_before" != "$sig_after" ]; then
+          WORKER_OUTCOME=SILENT
+          AUTOPILOT_TM_FAILURE_CLASS=SILENT
+          log "  truncated tool call (attempt $attempt), but the worktree changed → refusing to retry on top of its own edits"
+          break
+        fi
+        # 为何这里可以重试，而不与「原样重试 3/3 复现」矛盾：那份实测否定的是**原样**
+        # 重试。而 TRUNCATED 的定义本身已含「工作树零改动」，所以重试不存在叠半成品的
+        # 风险（那是当初禁止重试的唯一理由）。真正的硬要求是：这一次必须**改变输入**
+        # （降 reasoning-effort / 回落模型），否则就退化成已被证伪的原样重试。
+        # 两根杠杆都动不了时就不重试，而不是白花一次全价调用。
+        # 依据（2026-08-18 取证）：截断发生在回合序列化层（末条记录 stop_reason=tool_use
+        # 却不带 tool_use block），且两次截断均为 Ultimate、唯一跑通的是 Performance，
+        # 因此「降推理深度 / 换更浅的模型」是有针对性的换参，而非盲试。
+        if [ "$trunc_used" -lt "$trunc_attempts" ]; then
+          input_changed=false
+          if [ -n "$silent_effort" ] && [ "$effort" != "$silent_effort" ]; then
+            log "    → lowering reasoning effort to '$silent_effort'"
+            effort="$silent_effort"
+            input_changed=true
+          fi
+          if ! $switched && [ -n "$fallback_model" ] && [ "$fallback_model" != "$active_model" ]; then
+            log "    → falling back to $fallback_model for the remaining attempts"
+            active_model="$fallback_model"
+            switched=true
+            input_changed=true
+          fi
+          if $input_changed; then
+            trunc_used=$(( trunc_used + 1 ))
+            log "  truncated tool call (attempt $attempt) → retrying with changed input (worktree untouched, so this is safe)"
+            attempt=$(( attempt + 1 ))
+            continue
+          fi
+          log "  truncated tool call → no input knob left to change; an identical retry is known to reproduce it"
+        fi
+        ;;
     esac
     break
   done
@@ -608,7 +654,7 @@ build_review_prompt() {
   local out="$1" n="${2:-}" diff_file="${3:-}"
   {
     echo "你是一个代码审查专家，对本 Task 的代码变更做严格审查（Track A reviewer，经 dispatch.sh 调度）。"
-    echo; echo "以下是本 Task 的完整变更（有界 diff）。**先基于 diff 评审**；若某处需要上下文，再自行打开对应文件。"; echo
+    echo; echo "以下是本 Task 的完整变更（有界 diff）。**只依据这份 diff 评审，不要打开任何文件** —— diff 已是全量、未裁剪。"; echo
     # 使用预先生成并已校验过的 diff 文件，而不是在这里直接跑 review-context.sh：
     # 在 `{ ... } > "$out"` 里直调时，它的退出码会被后续的 echo 覆盖而彻底丢弃，
     # 于是 review-context 失败（$CWD 非 git 仓 / git 报错 / 本身出错）时，reviewer 会拿到
@@ -758,8 +804,16 @@ run_task() {
     fi
     build_review_prompt "$LOG_DIR/task-$n-review-$round-prompt.md" "$n" "$REVIEW_DIFF"
     log "  review (round $round) → dispatch($REVIEW_MODEL)"
+    # 「review 必须无工具、单轮」：reviewer 一旦被允许「必要时打开个别文件确认」，就会发起
+    # 工具调用，而 qodercli headless 在工具调用处高概率截断（stop_reason=tool_use、
+    # num_turns=3、result 为空），driver 按 TRUNCATED_TOOL_USE fail-closed，重试无用。
+    # 实测两次复现（2026-08-16 / 2026-08-18）：带工具诱导 → result_len=0；改为下面这句
+    # 禁工具指令 → stop_reason=end_turn、num_turns=1，正常给出 REVIEW_PASS 与 Minor 列表。
+    # diff 已由 review-context.sh 内联进 prompt，因此禁工具不损失审查信息。
+    # 注意：build_review_prompt 正文里那句「再自行打开对应文件」必须同步去掉，否则
+    # prompt 正文与本指令自相矛盾，模型仍会去调工具。
     dispatch_with_retry "review" "$REVIEW_MODEL" "$LOG_DIR/task-$n-review-$round-prompt.md" \
-      "基于已内联的有界 diff 审查，必要时才打开个别文件确认，回复末尾输出 REVIEW_PASS 或 REVIEW_FAIL（有 CRITICAL/MAJOR 才 FAIL 并列问题）。" \
+      "【纯文本审查：严禁调用任何工具、严禁打开任何文件，只依据附件中已内联的 diff 判断，直接输出结论。】回复末尾必须输出 REVIEW_PASS 或 REVIEW_FAIL（有 CRITICAL/MAJOR 才 FAIL 并列问题 + 文件:行号）。" \
       "$LOG_DIR/task-$n-review-$round.log"
 
     # Handle transport/silent/timeout for review

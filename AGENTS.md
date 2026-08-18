@@ -47,7 +47,8 @@ implement(worker-cli) → verify(编译) → review(reviewer-cli) → fix(worker
 | `AUTOPILOT_SILENT_EFFORT` | low | 静默后的重试降低 `--reasoning-effort` 到此档位（直接打击“回合死在 thinking 里”；实测同 prompt 默认档 1/4 静默 vs low 档 0/4）。**首次尝试不降档**以保质量；设空字符串关闭 |
 | `AUTOPILOT_SILENT_FALLBACK_MODEL` | Performance | 连续静默达 `AUTOPILOT_SILENT_SWITCH_AFTER` 次后换成该模型跑完剩余尝试；设空字符串关闭 |
 | `AUTOPILOT_SILENT_SWITCH_AFTER` | 2 | 静默几次后开始换模型（保证默认模型先被充分尝试） |
-| `AUTOPILOT_TRUNCATED_FAIL_CLOSED` | 1 | 取证判定为 `TRUNCATED_TOOL_USE`（模型发出工具调用、CLI 没执行就退出，工作树零改动）时**立即 fail-closed，不重试**。设 0 退回旧的 EMPTY 静默重试。**默认 1 是省钱决定**：两类静默的统计性质相反 —— thinking-only 是随机的（实测 Ultimate 8/15 静默，重试约一半概率开口，重试阶梯划得来），而截断是确定性的（`dispatch.sh` 实测原样重试 3/3 复现；真实每日分析 agent 3 次尝试只产出 87B/115B/118B、报告一次没落盘）。旧行为把一次注定失败的调用按全价买到 `AUTOPILOT_SILENT_RETRIES`（默认 5）遍 |
+| `AUTOPILOT_TRUNCATED_FAIL_CLOSED` | 1 | 取证判定为 `TRUNCATED_TOOL_USE`（模型发出工具调用、CLI 没执行就退出，工作树零改动）时按 TRUNCATED 分流（rc=125），**不落进 EMPTY 的 5 次全价静默重试**。设 0 退回旧的 EMPTY 静默重试。注意它只管**分类**，重试次数由下面的 `AUTOPILOT_TRUNCATED_RETRIES` 管。**默认 1 的理由**：两类静默统计性质相反 —— thinking-only 是随机的（实测 Ultimate 8/15 静默，重试约一半概率开口），而截断是确定性的（原样重试 3/3 复现；真实每日分析 agent 3 次尝试只产出 87B/115B/118B、报告一次没落盘） |
+| `AUTOPILOT_TRUNCATED_RETRIES` | 1 | 截断后允许的**换参**重试次数（`run-track-a.sh`）。设 0 = 立刻 fail-closed（2026-08-18 之前的行为）。**为何允许重试**：那句「原样重试 3/3 复现」否定的只是**原样**重试，而 `TRUNCATED` 的定义本身已含「工作树零改动」——当初禁止重试的唯一理由（怕叠在半成品上）在这里不成立。因此重试**必须真的换掉输入**（降 `AUTOPILOT_SILENT_EFFORT` / 回落 `AUTOPILOT_SILENT_FALLBACK_MODEL`），两根杠杆都动不了时就不重试，绝不白花一次全价调用。代价参照：一次截断曾让一个已 `mvn test` 通过的 696s implement 成果连带被弃 |
 | `AUTOPILOT_FINISH_MODE` | deterministic | finish 阶段执行方式；设 `worker` 退回旧的 agent 路径（需要 SKILL.md 里的 PR/CI 语义时）。实测 agent 路径 finish 7/7 未给结论，故默认确定性 |
 | `AUTOPILOT_RETRY_BACKOFF_S` | 5 | 传输重试指数退避基数秒数（5/10/20）；**只作用于 TRANSPORT**，静默不退避 |
 | `AUTOPILOT_USAGE_JSON` | 0 | 设 1 才启用 `qodercli -o json` usage 信封。**注意历史结论已于 2026-08-17 被推翻**：旧注释称 `-o json` 会让工具循环停在首个 tool_use（0/5 成功），重测（同一版本号 1.0.16、每变体 11 次）为 `-o json` 11/11、`-o text` 10/11、不带 `-o` 9/11。仍默认关闭的新理由：信封里 `total_cost_usd`/`input_tokens`/`output_tokens` **全为 0**，唯一有用的 `stop_reason` 已可由 `session-forensics.sh` 从 transcript 读到，零行为风险。**教训：用版本号钉住的实测结论不可靠，结论必须带日期并周期重测** |
@@ -85,7 +86,7 @@ $AGENT_DISPATCH --model "MODEL" --cwd "$PROJECT_ROOT" \
 | 脚本 | 职责 |
 |------|------|
 | `scripts/telemetry.sh` | 可 source 的遥测 lib：emit/rotate/log_root，写侧零依赖、fail-safe（绝不污染 stdout / 不改 exit code） |
-| `scripts/session-forensics.sh` | **静默 worker 取证**：读 CLI 自己落盘的 session transcript（`~/.qoder/projects/<物理cwd 的/换成->/<session-id>.jsonl`），定性为 `REPORTED` / `WORK_DONE_UNREPORTED` / `TRUNCATED_TOOL_USE` / `THINKING_ONLY`，并给出 cli_version。这四种对「能不能重试」的结论**互相矛盾**，是重试决策的唯一可靠判据 |
+| `scripts/session-forensics.sh` | **静默 worker 取证**：读 CLI 自己落盘的 session transcript（`~/.qoder/projects/<物理cwd 的/换成->/<session-id>.jsonl`），定性为 `REPORTED` / `WORK_DONE_UNREPORTED` / `TRUNCATED_TOOL_USE` / `THINKING_ONLY`，并给出 cli_version 与 `session_closed`。这四种对「能不能重试」的结论**互相矛盾**，是重试决策的唯一可靠判据。`session_closed` = transcript 里有没有 `type=last-prompt` 收尾记录：正常跑完的会话有，被掐断的没有（2026-08-18 真实 3/3 区分正确）；它比 `stop_reason` 更硬（后者可能缺失），用于给「调过工具、没动盘、但 stop_reason 说不清」的形态兜底判 `TRUNCATED_TOOL_USE`，避免它落进 `INCONCLUSIVE` 后被当 EMPTY 全价重试 5 次 |
 | `scripts/record-subagent.sh` | **subagent 通道记账**：主控会话内用 subagent 开发时，开发不经 dispatch.sh，遥测会整段缺失（实测：一个 9h37min / 13128 credits 的整夜在 runs/ 里一行都没有）。用 `start/end/round/task` 四个子命令按同一 schema 写进同一个 runs/*.jsonl，靠 `channel` 字段区分 cli / subagent |
 | `scripts/classify-outcome.sh` | 按退出码、锚定标记与日志大小分类 `OK/TRANSPORT/TIMEOUT/TRUNCATED/EMPTY/APP`，供有界重试决策使用。`TRUNCATED` 判据是 **rc=125 + 日志含 `TRUNCATED_TOOL_USE` 锚定行**这一对组合：`timeout(1)` 也用 125 表示自身启动失败，而本仓源码自己就含该字符串（worker 在本仓干活时可能把它打进日志），所以两者都不能单独作为判据 |
 | `scripts/parse-markers.sh` | 锚定式解析结论标记（`**Status:**` / `XXX_STATUS=` / `REVIEW_PASS|FAIL`，容列表符与反引号），是「worker 报没报数」的单一判据 |

@@ -94,6 +94,16 @@ TOOLS="$(jq -rs '
 # 这对本仓尤其重要：已经出现过「版本号不变而行为反转」，结论必须能钉到具体会话。
 CLI_VERSION="$(jq -rs '[ .[] | .version | select(. != null) ] | last // ""' "$TRANSCRIPT" 2>/dev/null || true)"
 
+# 会话有没有**正常收尾**。CLI 在一个完整回合结束后会追加一条 `type=last-prompt`
+# 记录；被中途掐断的会话没有它。2026-08-18 在三个真实 session 上验证（3/3 区分正确）：
+# 正常跑完的 implement 末条记录就是 last-prompt，两个截断的末条都停在 assistant。
+# 它比 stop_reason 更硬 —— stop_reason 可能缺失或为空，而这条记录的有无是二元事实，
+# 因此用来给「stop_reason 说不清但会话确实被掐断」的情形兜底（见下方判据）。
+SESSION_CLOSED=false
+if jq -e -s 'any(.[]; .type == "last-prompt")' "$TRANSCRIPT" >/dev/null 2>&1; then
+  SESSION_CLOSED=true
+fi
+
 # 是否动过盘。Write/Edit 类一律算；Bash **不能一律算**，必须看命令内容。
 # 已实测踩坑（每日分析 agent，session d09d5965）：它只跑了一个只读 `ls` 加 3 次 Read，
 # 一个字都没写，却因为「Bash 在列表里」被定成 WORK_DONE_UNREPORTED、结论“不要重试”——
@@ -136,6 +146,12 @@ elif $MUTATED; then
   VERDICT=WORK_DONE_UNREPORTED
 elif [ "$N_TOOL" -gt 0 ] && [ "$STOP_REASON" = tool_use ]; then
   VERDICT=TRUNCATED_TOOL_USE
+# 兜底：调过工具、没动盘、且会话没有正常收尾记录 —— 同样是被掐断在工具循环里，
+# 只是 stop_reason 没能证明它。不加这条时这种形态会落到 INCONCLUSIVE（“证据不足”），
+# 上层就只能按 EMPTY 走 5 次全价静默重试。放在 tool_use 判据之后、THINKING_ONLY
+# 之前：THINKING_ONLY 要求 N_TOOL=0，两者不重叠；MUTATED 已在更前面拦掉。
+elif [ "$N_TOOL" -gt 0 ] && ! $SESSION_CLOSED; then
+  VERDICT=TRUNCATED_TOOL_USE
 elif [ "$N_TOOL" -eq 0 ] && [ "$N_TEXT" -eq 0 ] && [ "$N_THINK" -gt 0 ]; then
   VERDICT=THINKING_ONLY
 else
@@ -143,15 +159,15 @@ else
 fi
 
 if [ "$FORMAT" = json ]; then
-  printf '{"session_id":"%s","verdict":"%s","stop_reason":"%s","thinking_blocks":%s,"text_blocks":%s,"tool_calls":%s,"mutated":%s,"tools":"%s","cli_version":"%s"}\n' \
-    "$SESSION_ID" "$VERDICT" "$STOP_REASON" "$N_THINK" "$N_TEXT" "$N_TOOL" "$MUTATED" "$TOOLS" "$CLI_VERSION"
+  printf '{"session_id":"%s","verdict":"%s","stop_reason":"%s","thinking_blocks":%s,"text_blocks":%s,"tool_calls":%s,"mutated":%s,"session_closed":%s,"tools":"%s","cli_version":"%s"}\n' \
+    "$SESSION_ID" "$VERDICT" "$STOP_REASON" "$N_THINK" "$N_TEXT" "$N_TOOL" "$MUTATED" "$SESSION_CLOSED" "$TOOLS" "$CLI_VERSION"
   exit 0
 fi
 
 echo "session-forensics: verdict=$VERDICT stop_reason=${STOP_REASON:-<none>}"
 echo "  session=$SESSION_ID cli_version=${CLI_VERSION:-unknown}"
 echo "  transcript=$TRANSCRIPT"
-echo "  blocks: thinking=$N_THINK text=$N_TEXT tool_use=$N_TOOL  mutated_worktree=$MUTATED"
+echo "  blocks: thinking=$N_THINK text=$N_TEXT tool_use=$N_TOOL  mutated_worktree=$MUTATED  session_closed=$SESSION_CLOSED"
 [ -z "$TOOLS" ] || echo "  tools: $TOOLS"
 case "$VERDICT" in
   REPORTED)

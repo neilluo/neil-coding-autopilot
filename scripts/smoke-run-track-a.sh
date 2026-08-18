@@ -537,5 +537,81 @@ if grep -q 'switching to' "$WORK/s11.log"; then fail "fallback ignored the opt-o
 [ "$rc11" -eq 2 ] && pass "opt-out still fails closed (exit 2)" || fail "exit=$rc11 (expected 2)"
 
 echo ""
+echo "===== Scenario 12: TRUNCATED tool call → one changed-input retry rescues the task ====="
+# 2026-08-18 取证：截断发生在回合序列化层（末条记录 stop_reason=tool_use 却不带
+# tool_use block、且没有 last-prompt 收尾），工作树零改动。历史「3/3 复现」只否定了
+# **原样**重试；换参（降 effort / 回落模型）必须能把 Task 救回来，否则一次截断
+# 就要搭上整个 run（实测代价：696s 的 implement 成果连带被弃）。
+if ! command -v jq >/dev/null 2>&1; then
+  echo "SKIP: jq not installed (TRUNCATED verdict is jq-gated by design)"
+else
+TRUNC_BIN="$WORK/bin-trunc"; mkdir -p "$TRUNC_BIN"
+cat > "$TRUNC_BIN/qodercli" <<'TRUNCSTUB'
+#!/usr/bin/env bash
+model=""; wdir=""; attach=""; effort="none"; sid=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -m) model="$2"; shift 2;;
+    -w) wdir="$2"; shift 2;;
+    --attachment) attach="$2"; shift 2;;
+    --reasoning-effort) effort="$2"; shift 2;;
+    --session-id) sid="$2"; shift 2;;
+    -p|--permission-mode) shift 2;;
+    *) shift;;
+  esac
+done
+# 首次尝试（未降档、未换模型）伪造「工具调用被截断」：写一份 stop_reason=tool_use
+# 且没有 last-prompt 收尾的 transcript，然后一言不发地 exit 0 —— 真实形态就是这样。
+if [ "$effort" = none ] && [ "$model" = TruncModel ]; then
+  slug="$(cd "$wdir" 2>/dev/null && pwd -P | tr '/' '-')"
+  mkdir -p "$QODER_SESSION_ROOT/$slug"
+  t="$QODER_SESSION_ROOT/$slug/$sid.jsonl"
+  printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"go"}]}}' >  "$t"
+  printf '%s\n' '{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","name":"Read"}]}}' >> "$t"
+  printf '\n'
+  exit 0
+fi
+# 换过参之后正常干活。
+if grep -q "代码审查专家" "$attach" 2>/dev/null; then
+  printf 'review body %0400d\n' 0
+  echo "REVIEW_PASS"
+else
+  printf 'impl body %0400d\n' 0
+  echo "work $(date +%s)-$RANDOM" >> "$wdir/trunc-proof.txt"
+  echo "**Status:** DONE"
+fi
+TRUNCSTUB
+chmod +x "$TRUNC_BIN/qodercli"
+P12="$(make_project true 1)"
+set +e
+TMPDIR="$WORK" PATH="$TRUNC_BIN:$PATH" AUTOPILOT_PLATFORM=qoder \
+  QODER_SESSION_ROOT="$WORK/sessions12" \
+  bash "$RUNNER" --change-dir "$P12/autopilot/changes/smoke" --cwd "$P12" \
+  --impl-model TruncModel --review-model TruncModel --max-rounds 2 \
+  > "$WORK/s12.log" 2>&1
+rc12=$?
+set -e
+grep -q 'retrying with changed input' "$WORK/s12.log" \
+  && pass "truncation triggers a changed-input retry" \
+  || { fail "no changed-input retry happened"; grep -n 'truncated\|TRUNCATED' "$WORK/s12.log" | sed 's/^/    | /'; }
+[ "$rc12" -eq 0 ] && pass "changed-input retry rescues the run (exit 0)" \
+  || { fail "exit=$rc12 (expected 0)"; tail -12 "$WORK/s12.log" | sed 's/^/    | /'; }
+[ -s "$P12/trunc-proof.txt" ] && pass "the retried worker really did the work" || fail "no work produced after the retry"
+
+# 反面：关掉旋钮必须立刻 fail-closed、一次都不重试（保留旧行为的逃生阀）。
+P13="$(make_project true 1)"
+set +e
+TMPDIR="$WORK" PATH="$TRUNC_BIN:$PATH" AUTOPILOT_PLATFORM=qoder \
+  QODER_SESSION_ROOT="$WORK/sessions13" AUTOPILOT_TRUNCATED_RETRIES=0 \
+  bash "$RUNNER" --change-dir "$P13/autopilot/changes/smoke" --cwd "$P13" \
+  --impl-model TruncModel --review-model TruncModel --max-rounds 2 \
+  > "$WORK/s13.log" 2>&1
+rc13=$?
+set -e
+[ "$rc13" -eq 2 ] && pass "AUTOPILOT_TRUNCATED_RETRIES=0 fails closed at once (exit 2)" || fail "exit=$rc13 (expected 2)"
+if grep -q 'retrying with changed input' "$WORK/s13.log"; then fail "the opt-out was ignored"; else pass "the opt-out really skips the retry"; fi
+fi
+
+echo ""
 if [ "$FAILED" -eq 0 ]; then echo "SMOKE(run-track-a): ALL PASS"; exit 0; fi
 echo "SMOKE(run-track-a): FAILURES"; exit 1
